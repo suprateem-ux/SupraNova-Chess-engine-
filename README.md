@@ -26,5 +26,3 @@
 git clone https://github.com/suprateem-ux/SupraNova-Chess-engine-
 cd SupraNova-Chess-engine-
 chmod +x Supranova_(executable)
-
-ff
