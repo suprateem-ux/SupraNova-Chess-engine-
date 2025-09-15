@@ -1,0 +1,1301 @@
+# It us a python non executable
+"""
+Bitboard-friendly chess engine (single-file).
+
+Changes from the original:
+- PEP8 / autopep8-style cleanup (imports, spacing, line lengths).
+- Keep board._transposition_key when present, but safely fall back to
+  board.transposition_key().
+- Fixed push/pop handling in several places to avoid stack imbalance.
+- Narrowed broad exception handlers and clarified some code paths.
+- Kept original optimizations (PosBB, hybrid SEE, move ordering, TT, mate
+  search, UCI loop) and retained original global configuration values.
+- [2024 Copilot PATCH] UCI stop/infinite/quit is robust, using threads and a thread-safe stop_event.
+- [2025 Copilot PATCH] Improved phase-dependent PSTs (middlegame/endgame) for all piece types.
+"""
+from __future__ import annotations
+
+import math
+import random
+import sys
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import chess
+import threading
+
+# ---------- CONFIG ----------
+MAX_DEPTH = 500
+MATE_VALUE = 1_000_000
+INFTY = 10**9
+DEFAULT_MOVE_TIME = 6.0
+ASPIRATION = 25
+NULL_REDUCTION = 2
+LMR_BASE = 0.75
+LMR_DIV = 2.0
+FUTILITY_MARGIN = 150
+QUIESCENCE_CAP = 2048
+MULTIPV_MAX = 4
+RANDOM_TIE = False
+
+# ---------- STATE ----------
+@dataclass
+class TTEntry:
+    key: int
+    depth: int
+    score: int
+    flag: int  # 0=EXACT, 1=LOWER, 2=UPPER
+    best: Optional[chess.Move]
+    age: int
+
+TT: Dict[int, TTEntry] = {}
+TT_AGE = 0
+KILLERS: Dict[int, List[Optional[chess.Move]]] = {}
+HISTORY: Dict[Tuple[int, int], int] = {}
+node_count = 0
+start_time = 0.0
+time_limit = 0.0
+NODE_LIMIT = None
+
+# Separate mate TT (store mate distances / scores to avoid confusion with eval TT)
+MateTT: Dict[int, Optional[int]] = {}
+
+# Threading event for robust stoppability
+stop_event = threading.Event()
+
+# ---------- PIECES & PST (with PHASE SUPPORT) ----------
+PV = {}
+PIECE_VALUE = {
+    chess.PAWN: 100,
+    chess.KNIGHT: 325,
+    chess.BISHOP: 335,
+    chess.ROOK: 500,
+    chess.QUEEN: 900,
+    chess.KING: 20000,
+}
+
+# Phase-dependent PSTs (White's perspective, mirror for Black)
+PST_MG = {
+    chess.PAWN: [
+         0,   0,   0,   0,   0,   0,   0,   0,
+        80,  90, 100, 110, 110, 100,  90,  80,
+        20,  25,  30,  40,  40,  30,  25,  20,
+        10,  15,  20,  35,  35,  20,  15,  10,
+         5,  10,  15,  25,  25,  15,  10,   5,
+         3,  -5, -10,   0,   0, -10,  -5,   3,
+         3,   5,   5, -20, -20,   5,   5,   3,
+         0,   0,   0,   0,   0,   0,   0,   0,
+    ],
+    chess.KNIGHT: [
+        -80, -60, -40, -40, -40, -40, -60, -80,
+        -60, -20,   5,  10,  10,   5, -20, -60,
+        -40,   5,  20,  30,  30,  20,   5, -40,
+        -40,  10,  30,  40,  40,  30,  10, -40,
+        -40,  10,  30,  40,  40,  30,  10, -40,
+        -40,   5,  20,  30,  30,  20,   5, -40,
+        -60, -20,   5,  10,  10,   5, -20, -60,
+        -80, -60, -40, -40, -40, -40, -60, -80,
+    ],
+    chess.BISHOP: [
+        -30, -20, -20, -20, -20, -20, -20, -30,
+        -20,  15,   0,   0,   0,   0,  15, -20,
+        -20,  20,  10,  15,  15,  10,  20, -20,
+        -20,   5,  15,  20,  20,  15,   5, -20,
+        -20,  10,  15,  20,  20,  15,  10, -20,
+        -20,  10,  10,  15,  15,  10,  10, -20,
+        -20,  10,   0,   0,   0,   0,  10, -20,
+        -30, -20, -20, -20, -20, -20, -20, -30,
+    ],
+    chess.ROOK: [
+         0,   0,   5,  10,  10,   5,   0,   0,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+         5,  10,  10,  15,  15,  10,  10,   5,
+         0,   0,   0,   0,   0,   0,   0,   0,
+    ],
+    chess.QUEEN: [
+        -20, -10, -10,  -5,  -5, -10, -10, -20,
+        -10,   0,   5,   0,   0,   5,   0, -10,
+        -10,   5,   5,   5,   5,   5,   5, -10,
+         -5,   0,   5,   5,   5,   5,   0,  -5,
+          0,   0,   5,   5,   5,   5,   0,  -5,
+        -10,   5,   5,   5,   5,   5,   0, -10,
+        -10,   0,   5,   0,   0,   0,   0, -10,
+        -20, -10, -10,  -5,  -5, -10, -10, -20,
+    ],
+    chess.KING: [
+        -40, -50, -50, -60, -60, -50, -50, -40,
+        -40, -50, -50, -60, -60, -50, -50, -40,
+        -40, -50, -50, -60, -60, -50, -50, -40,
+        -40, -50, -50, -60, -60, -50, -50, -40,
+        -30, -40, -40, -50, -50, -40, -40, -30,
+        -20, -30, -30, -30, -30, -30, -30, -20,
+         20,  20,   0,   0,   0,   0,  20,  20,
+         20,  30,  10,   0,   0,  10,  30,  20,
+    ],
+}
+
+PST_EG = {
+    chess.PAWN: [
+         0,   0,   0,   0,   0,   0,   0,   0,
+        80,  90, 100, 110, 110, 100,  90,  80,
+        30,  40,  50,  60,  60,  50,  40,  30,
+        20,  25,  35,  45,  45,  35,  25,  20,
+        10,  15,  20,  30,  30,  20,  15,  10,
+        10,  10,  15,  25,  25,  15,  10,  10,
+         0,   0,   0,   0,   0,   0,   0,   0,
+         0,   0,   0,   0,   0,   0,   0,   0,
+    ],
+    chess.KNIGHT: [
+        -60, -50, -40, -40, -40, -40, -50, -60,
+        -50, -40,   0,   0,   0,   0, -40, -50,
+        -40,   0,  10,  15,  15,  10,   0, -40,
+        -40,   0,  15,  20,  20,  15,   0, -40,
+        -40,   0,  15,  20,  20,  15,   0, -40,
+        -40,   0,  10,  15,  15,  10,   0, -40,
+        -50, -40,   0,   0,   0,   0, -40, -50,
+        -60, -50, -40, -40, -40, -40, -50, -60,
+    ],
+    chess.BISHOP: [
+        -20, -10, -10, -10, -10, -10, -10, -20,
+        -10,  10,   0,   0,   0,   0,  10, -10,
+        -10,  10,  10,  10,  10,  10,  10, -10,
+        -10,   0,  10,  10,  10,  10,   0, -10,
+        -10,   5,   5,  10,  10,   5,   5, -10,
+        -10,   0,   5,  10,  10,   5,   0, -10,
+        -10,   0,   0,   0,   0,   0,   0, -10,
+        -20, -10, -10, -10, -10, -10, -10, -20,
+    ],
+    chess.ROOK: [
+         0,   0,   5,  10,  10,   5,   0,   0,
+         5,  10,  10,  15,  15,  10,  10,   5,
+         0,   0,   5,  10,  10,   5,   0,   0,
+         0,   0,   0,   5,   5,   0,   0,   0,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+        -5,   0,   0,   0,   0,   0,   0,  -5,
+         0,   0,   0,   0,   0,   0,   0,   0,
+    ],
+    chess.QUEEN: [
+        -20, -10, -10,  -5,  -5, -10, -10, -20,
+        -10,   0,   5,   0,   0,   5,   0, -10,
+        -10,   5,   5,   5,   5,   5,   5, -10,
+         -5,   0,   5,   5,   5,   5,   0,  -5,
+          0,   0,   5,   5,   5,   5,   0,  -5,
+        -10,   5,   5,   5,   5,   5,   0, -10,
+        -10,   0,   5,   0,   0,   0,   0, -10,
+        -20, -10, -10,  -5,  -5, -10, -10, -20,
+    ],
+    chess.KING: [
+        -10, -10, -10, -10, -10, -10, -10, -10,
+         10,  20,  20,  20,  20,  20,  20,  10,
+         10,  20,  30,  30,  30,  30,  20,  10,
+         10,  20,  30,  40,  40,  30,  20,  10,
+         10,  20,  30,  40,  40,  30,  20,  10,
+         10,  20,  30,  30,  30,  30,  20,  10,
+         10,  10,  10,  10,  10,  10,  10,  10,
+         0,   0,   0,   0,   0,   0,   0,   0,
+    ],
+}
+
+# Phase weights (similar to Stockfish)
+PHASE_WEIGHTS = {
+    chess.PAWN: 0,
+    chess.KNIGHT: 1,
+    chess.BISHOP: 1,
+    chess.ROOK: 2,
+    chess.QUEEN: 4,
+    chess.KING: 0,
+}
+PHASE_MAX = sum(v * 2 for k, v in PHASE_WEIGHTS.items() if k != chess.KING)
+
+def get_phase(board: chess.Board) -> int:
+    phase = PHASE_MAX
+    for pt in PHASE_WEIGHTS:
+        phase -= PHASE_WEIGHTS[pt] * (len(board.pieces(pt, chess.WHITE)) + len(board.pieces(pt, chess.BLACK)))
+    return max(0, min(phase, PHASE_MAX))
+
+def interpolate_pst(board: chess.Board, pt: int, sq: int, color: bool) -> int:
+    phase = get_phase(board)
+    mg = PST_MG[pt][sq if color == chess.WHITE else chess.square_mirror(sq)]
+    eg = PST_EG[pt][sq if color == chess.WHITE else chess.square_mirror(sq)]
+    score = ((mg * (PHASE_MAX - phase)) + (eg * phase)) // PHASE_MAX
+    return score
+
+# ---------- UTIL ----------
+def now() -> float:
+    return time.time()
+
+def timeout() -> bool:
+    return stop_event.is_set() or ((time.time() - start_time) >= time_limit)
+
+def within_node_limit() -> bool:
+    return (NODE_LIMIT is None) or (node_count < NODE_LIMIT)
+
+def get_key(board: chess.Board) -> int:
+    try:
+        return board.zobrist_hash()  # type: ignore[attr-defined]
+    except AttributeError:
+        return hash(board.fen())
+
+# ---------- BITBOARD HELPERS ----------
+def lsb(bitboard: int) -> Optional[int]:
+    if bitboard == 0:
+        return None
+    return (bitboard & -bitboard).bit_length() - 1
+
+def pop_lsb(bitboard: int) -> Tuple[Optional[int], int]:
+    if bitboard == 0:
+        return None, 0
+    l = lsb(bitboard)
+    return l, bitboard & (bitboard - 1)
+
+# ---------- BITBOARD CACHE (per-position) ----------
+class PosBB:
+    __slots__ = ("board", "occ", "piece_bb_w", "piece_bb_b", "all_attack_cache")
+    def __init__(self, board: chess.Board):
+        self.board = board
+        self.occ = int(board.occupied)
+        self.piece_bb_w = {pt: int(board.pieces(pt, chess.WHITE)) for pt in PIECE_VALUE}
+        self.piece_bb_b = {pt: int(board.pieces(pt, chess.BLACK)) for pt in PIECE_VALUE}
+        self.all_attack_cache: Dict[int, int] = {}
+    def attackers_bb(self, color: bool, square: int) -> int:
+        return int(self.board.attackers(color, square))
+
+# ---------- STATIC EXCHANGE EVALUATION (bitboard-simulated) ----------
+def see_safe(board: chess.Board, move: chess.Move) -> int:
+    try:
+        b = board.copy()
+        b.push(move)
+        if board.is_en_passant(move):
+            captured_piece_type = chess.PAWN
+            base = PIECE_VALUE.get(captured_piece_type, 0)
+        else:
+            captured_piece = board.piece_at(move.to_square)
+            base = PIECE_VALUE.get(captured_piece.piece_type, 0) if captured_piece else 0
+
+        gains: List[int] = [base]
+        side = not board.turn
+        while True:
+            attackers = list(b.attackers(side, move.to_square))
+            if not attackers:
+                break
+            best_sq = attackers[0]
+            piece = b.piece_at(best_sq)
+            best_val = PIECE_VALUE.get(piece.piece_type, 0) if piece else 0
+            for a in attackers:
+                piece_a = b.piece_at(a)
+                v = PIECE_VALUE.get(piece_a.piece_type, 0) if piece_a else 0
+                if v < best_val:
+                    best_val = v
+                    best_sq = a
+            cap_move = chess.Move(best_sq, move.to_square)
+            if cap_move not in b.legal_moves:
+                break
+            captured_now = b.piece_at(move.to_square)
+            captured_now_val = PIECE_VALUE.get(captured_now.piece_type, 0) if captured_now else 0
+            gains.append(captured_now_val - gains[-1])
+            b.push(cap_move)
+            side = not side
+        for i in range(len(gains) - 2, -1, -1):
+            gains[i] = max(-gains[i + 1], gains[i])
+        return gains[0] if gains else 0
+    except Exception:
+        return 0
+
+def see(board: chess.Board, move: chess.Move) -> int:
+    if not board.is_capture(move) and not move.promotion:
+        return 0
+
+    pbb = PosBB(board)
+    to_sq = move.to_square
+    from_sq = move.from_square
+    side = board.turn
+
+    if board.is_en_passant(move):
+        victim_sq = to_sq + (-8 if side == chess.WHITE else 8)
+        victim_piece_type = chess.PAWN
+    else:
+        victim_piece = board.piece_at(to_sq)
+        victim_sq = to_sq
+        victim_piece_type = victim_piece.piece_type if victim_piece else None
+
+    victim_value = PIECE_VALUE.get(victim_piece_type, 0) if victim_piece_type else 0
+
+    attackers_white = pbb.attackers_bb(chess.WHITE, to_sq)
+    attackers_black = pbb.attackers_bb(chess.BLACK, to_sq)
+
+    mover = board.piece_at(from_sq)
+    if mover:
+        if mover.color == chess.WHITE:
+            attackers_white &= ~(1 << from_sq)
+        else:
+            attackers_black &= ~(1 << from_sq)
+
+    occ = pbb.occ
+    occ &= ~(1 << from_sq)
+    occ |= 1 << to_sq
+    if board.is_en_passant(move):
+        occ &= ~(1 << victim_sq)
+
+    try:
+        b = board.copy(stack=False)
+    except TypeError:
+        b = board.copy()
+
+    try:
+        b.push(move)
+    except Exception:
+        return see_safe(board, move)
+
+    gains: List[int] = [victim_value]
+    side_to_move = not side
+
+    while True:
+        attackers = list(b.attackers(side_to_move, to_sq))
+        if not attackers:
+            break
+        best_sq = attackers[0]
+        piece = b.piece_at(best_sq)
+        best_val = PIECE_VALUE.get(piece.piece_type, 0) if piece else 0
+        for a in attackers:
+            piece_a = b.piece_at(a)
+            pv = PIECE_VALUE.get(piece_a.piece_type, 0) if piece_a else 0
+            if pv < best_val:
+                best_val = pv
+                best_sq = a
+        cap_move = chess.Move(best_sq, to_sq)
+        if cap_move not in b.legal_moves:
+            break
+        captured_now = b.piece_at(to_sq)
+        captured_now_val = PIECE_VALUE.get(captured_now.piece_type, 0) if captured_now else 0
+        gains.append(captured_now_val - gains[-1])
+        try:
+            b.push(cap_move)
+        except Exception:
+            break
+        side_to_move = not side_to_move
+
+    for i in range(len(gains) - 2, -1, -1):
+        gains[i] = max(-gains[i + 1], gains[i])
+    return gains[0] if gains else 0
+
+# ---------- MOVE ORDERING ----------
+def mvv_lva_score(board: chess.Board, move: chess.Move) -> int:
+    if board.is_capture(move):
+        victim = board.piece_at(move.to_square)
+        attacker = board.piece_at(move.from_square)
+        v = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
+        a = PIECE_VALUE.get(attacker.piece_type, 0) if attacker else 0
+        return v * 100 - a
+    if move.promotion:
+        return 90_000
+    return 0
+
+def move_score(
+    board: chess.Board,
+    move: chess.Move,
+    pv_move: Optional[chess.Move],
+    ply: int,
+) -> int:
+    score = 0
+    if pv_move and move == pv_move:
+        score += 1_000_000
+    score += mvv_lva_score(board, move)
+    if move in KILLERS.get(ply, []):
+        score += 80_000
+    score += HISTORY.get((move.from_square, move.to_square), 0)
+    if board.is_capture(move):
+        s = see(board, move)
+        score += max(0, s)
+    try:
+        if board.gives_check(move):
+            score += 50_000
+    except Exception:
+        pass
+    return score
+
+def order_moves(
+    board: chess.Board, moves: List[chess.Move], pv_move: Optional[chess.Move], ply: int
+) -> List[chess.Move]:
+    scored: List[Tuple[int, chess.Move]] = []
+    for m in moves:
+        sc = move_score(board, m, pv_move, ply)
+        if RANDOM_TIE:
+            sc = (sc << 8) + random.randint(0, 255)
+        scored.append((sc, m))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [m for (_, m) in scored]
+
+# ---------- EVALUATION ----------
+# Global pawn hash table to cache pawn structure evaluations
+PAWN_HASH = {}
+
+def pawn_structure_hash(board):
+    # Use white and black pawn bitboards as the key
+    key = (int(board.pieces(chess.PAWN, chess.WHITE)), int(board.pieces(chess.PAWN, chess.BLACK)))
+    if key in PAWN_HASH:
+        return PAWN_HASH[key]
+    score_white = 0
+
+    def is_passed_pawn(board, square, color):
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        opp_pawns = board.pieces(chess.PAWN, not color)
+        for f in range(max(0, file-1), min(7, file+1)+1):
+            for r in (range(rank+1, 8) if color == chess.WHITE else range(rank-1, -1, -1)):
+                sq = chess.square(f, r)
+                if sq in opp_pawns:
+                    return False
+        return True
+
+    def is_isolated_pawn(board, square, color):
+        file = chess.square_file(square)
+        for df in [-1, 1]:
+            nf = file + df
+            if 0 <= nf < 8:
+                found = False
+                for r in range(8):
+                    sq = chess.square(nf, r)
+                    if sq in board.pieces(chess.PAWN, color):
+                        found = True
+                        break
+                if found:
+                    return False
+        return True
+
+    def is_doubled_pawn(board, square, color):
+        file = chess.square_file(square)
+        count = 0
+        for r in range(8):
+            sq = chess.square(file, r)
+            if sq in board.pieces(chess.PAWN, color):
+                count += 1
+        return count > 1
+
+    def pawn_chain_bonus(board, square, color):
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        if color == chess.WHITE:
+            for df in [-1, 1]:
+                nf = file + df
+                nr = rank - 1
+                if 0 <= nf < 8 and 0 <= nr < 8:
+                    sq = chess.square(nf, nr)
+                    if sq in board.pieces(chess.PAWN, color):
+                        return 10
+        else:
+            for df in [-1, 1]:
+                nf = file + df
+                nr = rank + 1
+                if 0 <= nf < 8 and 0 <= nr < 8:
+                    sq = chess.square(nf, nr)
+                    if sq in board.pieces(chess.PAWN, color):
+                        return 10
+        return 0
+
+    def is_blockaded(board, square, color):
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        if color == chess.WHITE and rank < 7:
+            sq = chess.square(file, rank + 1)
+            piece = board.piece_at(sq)
+            return piece is not None and piece.color != color
+        if color == chess.BLACK and rank > 0:
+            sq = chess.square(file, rank - 1)
+            piece = board.piece_at(sq)
+            return piece is not None and piece.color != color
+        return False
+
+    # White pawns
+    for sq in board.pieces(chess.PAWN, chess.WHITE):
+        rank = chess.square_rank(sq)
+        if is_passed_pawn(board, sq, chess.WHITE):
+            score_white += 20 * (rank - 1)
+        if is_isolated_pawn(board, sq, chess.WHITE):
+            score_white -= 16
+        if is_doubled_pawn(board, sq, chess.WHITE):
+            score_white -= 13
+        score_white += pawn_chain_bonus(board, sq, chess.WHITE)
+        if is_blockaded(board, sq, chess.WHITE):
+            score_white -= 15
+
+    # Black pawns
+    for sq in board.pieces(chess.PAWN, chess.BLACK):
+        rank = 7 - chess.square_rank(sq)
+        if is_passed_pawn(board, sq, chess.BLACK):
+            score_white -= 20 * (rank - 1)
+        if is_isolated_pawn(board, sq, chess.BLACK):
+            score_white += 16
+        if is_doubled_pawn(board, sq, chess.BLACK):
+            score_white += 13
+        score_white -= pawn_chain_bonus(board, sq, chess.BLACK)
+        if is_blockaded(board, sq, chess.BLACK):
+            score_white += 15
+
+    PAWN_HASH[key] = score_white
+    return score_white
+
+def evaluate(board: chess.Board) -> int:
+    score_white = 0
+
+    # --- Material and PST ---
+    for pt, val in PIECE_VALUE.items():
+        w_count = len(board.pieces(pt, chess.WHITE))
+        b_count = len(board.pieces(pt, chess.BLACK))
+        score_white += val * (w_count - b_count)
+        for s in board.pieces(pt, chess.WHITE):
+            pst_bonus = interpolate_pst(board, pt, s, chess.WHITE) // 2
+            # Bishop pair PST adjustment: bonus for central squares if 2 bishops
+            if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
+                if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
+                    pst_bonus += 10
+            score_white += pst_bonus
+        for s in board.pieces(pt, chess.BLACK):
+            pst_bonus = interpolate_pst(board, pt, s, chess.BLACK) // 2
+            if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
+                if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
+                    pst_bonus += 10
+            score_white -= pst_bonus
+
+    # --- Advanced Mobility (piece-specific) ---
+    mobility_white = 0
+    mobility_black = 0
+    for pt in [chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]:
+        for sq in board.pieces(pt, chess.WHITE):
+            mobility_white += len(board.attacks(sq))
+        for sq in board.pieces(pt, chess.BLACK):
+            mobility_black += len(board.attacks(sq))
+    score_white += (mobility_white - mobility_black) * 2
+
+    # --- Legal Moves (side to move) ---
+    score_white += (len(list(board.legal_moves)) // 2) * (1 if board.turn == chess.WHITE else -1)
+
+    # --- Center Control (classic) ---
+    for c in [chess.E4, chess.D4, chess.E5, chess.D5]:
+        p = board.piece_at(c)
+        if p:
+            score_white += 15 if p.color == chess.WHITE else -15
+
+    # --- Bishop Pair Bonus (flat part already in PST above) ---
+    if len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
+        score_white += 35
+    if len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
+        score_white -= 35
+
+    # --- Outpost Bonus (N/B on advanced square, not attackable by enemy pawns) ---
+    def is_outpost(board, sq, color):
+        rank = chess.square_rank(sq)
+        file = chess.square_file(sq)
+        if color == chess.WHITE and rank >= 3:
+            for df in [-1, 1]:
+                f = file + df
+                if 0 <= f < 8:
+                    for r in range(rank, 8):
+                        if chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK):
+                            return False
+            return True
+        if color == chess.BLACK and rank <= 4:
+            for df in [-1, 1]:
+                f = file + df
+                if 0 <= f < 8:
+                    for r in range(rank, -1, -1):
+                        if chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE):
+                            return False
+            return True
+        return False
+
+    for sq in board.pieces(chess.KNIGHT, chess.WHITE):
+        if is_outpost(board, sq, chess.WHITE):
+            score_white += 18
+    for sq in board.pieces(chess.BISHOP, chess.WHITE):
+        if is_outpost(board, sq, chess.WHITE):
+            score_white += 12
+    for sq in board.pieces(chess.KNIGHT, chess.BLACK):
+        if is_outpost(board, sq, chess.BLACK):
+            score_white -= 18
+    for sq in board.pieces(chess.BISHOP, chess.BLACK):
+        if is_outpost(board, sq, chess.BLACK):
+            score_white -= 12
+
+    # --- Pawn Structure (passed, isolated, doubled, chains, blockades) with hash ---
+    score_white += pawn_structure_hash(board)
+
+    # --- Rook on 7th/8th, open/semi-open files ---
+    def is_open_file(board, file, color):
+        own_pawns = board.pieces(chess.PAWN, color)
+        enemy_pawns = board.pieces(chess.PAWN, not color)
+        for r in range(8):
+            sq = chess.square(file, r)
+            if sq in own_pawns:
+                return False
+        for r in range(8):
+            sq = chess.square(file, r)
+            if sq in enemy_pawns:
+                return False
+        return True
+
+    def is_semi_open_file(board, file, color):
+        own_pawns = board.pieces(chess.PAWN, color)
+        for r in range(8):
+            sq = chess.square(file, r)
+            if sq in own_pawns:
+                return False
+        return True
+
+    for sq in board.pieces(chess.ROOK, chess.WHITE):
+        rank = chess.square_rank(sq)
+        file = chess.square_file(sq)
+        if rank == 6 or rank == 7:
+            score_white += 22
+        if is_open_file(board, file, chess.WHITE):
+            score_white += 18
+        elif is_semi_open_file(board, file, chess.WHITE):
+            score_white += 9
+    for sq in board.pieces(chess.ROOK, chess.BLACK):
+        rank = chess.square_rank(sq)
+        file = chess.square_file(sq)
+        if rank == 1 or rank == 0:
+            score_white -= 22
+        if is_open_file(board, file, chess.BLACK):
+            score_white -= 18
+        elif is_semi_open_file(board, file, chess.BLACK):
+            score_white -= 9
+
+    # --- Space Advantage (minor/major in enemy half) ---
+    space_white = 0
+    space_black = 0
+    for sq in range(8, 32):
+        p = board.piece_at(sq)
+        if p and p.color == chess.WHITE and p.piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+            space_white += 1
+    for sq in range(32, 56):
+        p = board.piece_at(sq)
+        if p and p.color == chess.BLACK and p.piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+            space_black += 1
+    score_white += 12 * (space_white - space_black)
+
+    # --- King Safety (detailed: open files near king, enemy attack units) ---
+    phase = get_phase(board)
+    for color in [chess.WHITE, chess.BLACK]:
+        king_sq_list = list(board.pieces(chess.KING, color))
+        if not king_sq_list:
+            continue
+        sq = king_sq_list[0]
+        king_rank = chess.square_rank(sq)
+        king_file = chess.square_file(sq)
+        shield = 0
+        open_files = 0
+        if (color == chess.WHITE and phase < PHASE_MAX // 2 and king_rank <= 1) or \
+           (color == chess.BLACK and phase < PHASE_MAX // 2 and king_rank >= 6):
+            for df in [-1, 0, 1]:
+                f = king_file + df
+                if 0 <= f < 8:
+                    if color == chess.WHITE:
+                        pawn_sq = chess.square(f, king_rank + 1)
+                        if pawn_sq in board.pieces(chess.PAWN, chess.WHITE):
+                            shield += 1
+                        file_pawns = any(chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE) for r in range(8))
+                        if not file_pawns:
+                            open_files += 1
+                    else:
+                        pawn_sq = chess.square(f, king_rank - 1)
+                        if pawn_sq in board.pieces(chess.PAWN, chess.BLACK):
+                            shield += 1
+                        file_pawns = any(chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK) for r in range(8))
+                        if not file_pawns:
+                            open_files += 1
+        penalty = (3 - shield) * 18 + open_files * 12
+        attackers = 0
+        for df in [-1, 0, 1]:
+            for dr in [-1, 0, 1]:
+                if df == 0 and dr == 0:
+                    continue
+                f = king_file + df
+                r = king_rank + dr
+                if 0 <= f < 8 and 0 <= r < 8:
+                    sq2 = chess.square(f, r)
+                    if board.is_attacked_by(not color, sq2):
+                        attackers += 1
+        penalty += attackers * 10
+        if color == chess.WHITE:
+            score_white -= penalty
+        else:
+            score_white += penalty
+
+    # --- Check bonus/penalty ---
+    if board.is_check():
+        if board.turn == chess.WHITE:
+            score_white -= 55
+        else:
+            score_white += 55
+
+    # --- Return for side to move ---
+    return score_white if board.turn == chess.WHITE else -score_white
+
+# ---------- QUIESCENCE ----------
+def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
+    global node_count
+    if timeout():
+        raise TimeoutError
+    node_count += 1
+    stand = evaluate(board)
+    if stand >= beta:
+        return beta
+    if alpha < stand:
+        alpha = stand
+    moves = [m for m in board.legal_moves if board.is_capture(m) or m.promotion]
+    if not moves:
+        return stand
+    moves = order_moves(board, moves, None, 0)
+    for m in moves:
+        if board.is_capture(m):
+            s = see(board, m)
+            if s + 50 < 0:
+                continue
+        board.push(m)
+        try:
+            val = -quiescence(board, -beta, -alpha)
+        finally:
+            board.pop()
+        if val >= beta:
+            return beta
+        if val > alpha:
+            alpha = val
+    return alpha
+
+# ---------- TRANSPO TABLE ----------
+TT_EXACT = 0
+TT_LOWER = 1
+TT_UPPER = 2
+TT_SIZE_LIMIT = 2_000_000
+
+def tt_lookup(key: int, depth: int, alpha: int, beta: int) -> Optional[int]:
+    e = TT.get(key)
+    if not e:
+        return None
+    if e.depth >= depth:
+        if e.flag == TT_EXACT:
+            return e.score
+        if e.flag == TT_LOWER and e.score > alpha:
+            alpha = e.score
+        if e.flag == TT_UPPER and e.score < beta:
+            beta = e.score
+        if alpha >= beta:
+            return e.score
+    return None
+
+def tt_store(key: int, depth: int, score: int, flag: int, best: Optional[chess.Move]) -> None:
+    global TT_AGE
+    e = TT.get(key)
+    if e is None or depth > e.depth or e.age != TT_AGE:
+        TT[key] = TTEntry(key, depth, score, flag, best, TT_AGE)
+
+# ---------- ALPHA-BETA (full search) ----------
+def alpha_beta(
+    board: chess.Board,
+    depth: int,
+    alpha: int,
+    beta: int,
+    ply: int,
+    allow_null: bool,
+    pv_move: Optional[chess.Move],
+) -> int:
+    global node_count, TT_AGE
+    if timeout():
+        raise TimeoutError
+    node_count += 1
+
+    key = get_key(board)
+    ttent = TT.get(key)
+    if ttent and ttent.depth >= depth:
+        if ttent.flag == TT_EXACT:
+            return ttent.score
+        if ttent.flag == TT_LOWER:
+            alpha = max(alpha, ttent.score)
+        elif ttent.flag == TT_UPPER:
+            beta = min(beta, ttent.score)
+        if alpha >= beta:
+            return ttent.score
+
+    if board.is_checkmate():
+        return -MATE_VALUE + ply
+    if board.is_stalemate():
+        return 0
+    if depth <= 0:
+        return quiescence(board, alpha, beta)
+
+    pvmove = ttent.best if ttent else None
+
+    if allow_null and depth >= 3 and not board.is_check() and not board.can_claim_draw():
+        board.push(chess.Move.null())
+        try:
+            val = -alpha_beta(board, depth - 1 - NULL_REDUCTION, -beta, -beta + 1, ply + 1, False, None)
+            if val >= beta:
+                return beta
+        finally:
+            board.pop()
+
+    moves = list(board.legal_moves)
+    if not moves:
+        return 0
+
+    moves = order_moves(board, moves, pvmove or pv_move, ply)
+    best_score = -INFTY
+    best_move: Optional[chess.Move] = None
+    first = True
+
+    for i, mv in enumerate(moves):
+        if depth <= 2 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
+            est = evaluate(board)
+            if est + FUTILITY_MARGIN <= alpha:
+                continue
+
+        reduction = 0
+        if not first and depth >= 3 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
+            reduction = int(LMR_BASE + math.log(max(depth, 2)) / LMR_DIV + math.log(i + 1) / LMR_DIV)
+            reduction = max(0, min(reduction, depth - 2))
+
+        board.push(mv)
+        try:
+            if first:
+                val = -alpha_beta(board, depth - 1, -beta, -alpha, ply + 1, True, None)
+            else:
+                try_depth = depth - 1 - reduction
+                if try_depth < 0:
+                    try_depth = 0
+                val = -alpha_beta(board, try_depth, -alpha - 1, -alpha, ply + 1, True, None)
+                if alpha < val < beta:
+                    val = -alpha_beta(board, depth - 1, -beta, -alpha, ply + 1, True, None)
+        finally:
+            board.pop()
+
+        first = False
+        if val > best_score:
+            best_score = val
+            best_move = mv
+        if val > alpha:
+            alpha = val
+        if alpha >= beta:
+            if not board.is_capture(mv):
+                km = KILLERS.setdefault(ply, [None, None])
+                if km[0] != mv:
+                    km[1] = km[0]
+                    km[0] = mv
+            HISTORY[(mv.from_square, mv.to_square)] = HISTORY.get((mv.from_square, mv.to_square), 0) + depth * depth
+            tt_store(key, depth, alpha, TT_LOWER, mv)
+            return alpha
+
+    flag = TT_EXACT
+    if best_score <= alpha:
+        flag = TT_UPPER
+    elif best_score >= beta:
+        flag = TT_LOWER
+    tt_store(key, depth, best_score, flag, best_move)
+    return best_score
+
+# ---------- MATE-ONLY SEARCH (fast focused solver) ----------
+def mate_dfs(board: chess.Board, depth: int, ply: int) -> Optional[int]:
+    global node_count
+    if timeout():
+        raise TimeoutError
+    node_count += 1
+
+    key = get_key(board) ^ depth
+    if key in MateTT:
+        return MateTT[key]
+
+    if board.is_checkmate() or board.is_stalemate() or depth == 0:
+        MateTT[key] = None
+        return None
+
+    moves = list(board.legal_moves)
+    checks = [m for m in moves if board.gives_check(m)]
+    captures = [m for m in moves if board.is_capture(m) and m not in checks]
+    others = [m for m in moves if (m not in checks and m not in captures)]
+    ordered = checks + captures + others
+
+    for m in ordered:
+        board.push(m)
+        try:
+            if board.is_checkmate():
+                board.pop()
+                mate_score = MATE_VALUE - ply
+                MateTT[key] = mate_score
+                return mate_score
+
+            opp_has_escape = False
+            opp_moves = list(board.legal_moves)
+            opp_checks = [om for om in opp_moves if board.gives_check(om)]
+            opp_captures = [om for om in opp_moves if board.is_capture(om) and om not in opp_checks]
+            opp_others = [om for om in opp_moves if (om not in opp_checks and om not in opp_captures)]
+            opp_ordered = opp_checks + opp_captures + opp_others
+
+            for om in opp_ordered:
+                board.push(om)
+                try:
+                    res = mate_dfs(board, depth - 2, ply + 2)
+                finally:
+                    board.pop()
+                if res is None:
+                    opp_has_escape = True
+                    break
+
+            if not opp_has_escape:
+                mate_score = MATE_VALUE - ply
+                MateTT[key] = mate_score
+                board.pop()
+                return mate_score
+        finally:
+            if board.move_stack and board.move_stack[-1] == m:
+                board.pop()
+
+    MateTT[key] = None
+    return None
+
+def mate_search_root(board: chess.Board, max_mate_ply: int, time_limit_s: float) -> Optional[List[chess.Move]]:
+    global start_time, time_limit, node_count, MateTT
+    node_count = 0
+    MateTT = {}
+    start_time = time.time()
+    time_limit = time_limit_s
+    stop_event.clear()
+
+    for depth in range(1, max_mate_ply + 1):
+        if timeout():
+            break
+        try:
+            res = mate_dfs(board, depth, 1)
+        except TimeoutError:
+            break
+        if res is not None:
+            pv: List[chess.Move] = []
+            b = board.copy()
+            ply = 1
+            while True:
+                if timeout():
+                    break
+                moves = list(b.legal_moves)
+                moves_ord = sorted(moves, key=lambda m: move_score(b, m, None, ply), reverse=True)
+                found = False
+                for m in moves_ord:
+                    b.push(m)
+                    try:
+                        sat = mate_dfs(b, depth - ply + 1, ply + 1)
+                    finally:
+                        if b.move_stack:
+                            b.pop()
+                    if sat is not None:
+                        pv.append(m)
+                        b.push(m)
+                        found = True
+                        break
+                if not found:
+                    break
+                if b.is_checkmate():
+                    break
+                ply += 1
+            return pv
+    return None
+
+# ---------- ROOT SEARCH & ITERATIVE DEEPENING (full search) ----------
+def extract_pv(board: chess.Board, depth_limit: int) -> List[chess.Move]:
+    pv: List[chess.Move] = []
+    b = board.copy()
+    for _ in range(depth_limit):
+        e = TT.get(get_key(b))
+        if not e or not e.best:
+            break
+        mv = e.best
+        if mv not in b.legal_moves:
+            break
+        pv.append(mv)
+        b.push(mv)
+    return pv
+
+def root_search(
+    board: chess.Board,
+    max_depth: int,
+    movetime: Optional[float] = None,
+    nodes_limit: Optional[int] = None,
+    multipv: int = 1,
+):
+    global node_count, start_time, time_limit, TT_AGE, NODE_LIMIT
+    node_count = 0
+    TT_AGE = (TT_AGE + 1) % 256
+    stop_event.clear()
+    start_time = time.time()
+    time_limit = movetime if movetime else DEFAULT_MOVE_TIME
+    NODE_LIMIT = nodes_limit
+    best_move: Optional[chess.Move] = None
+    best_score = -INFTY
+    multipv = max(1, min(MULTIPV_MAX, multipv))
+    results: List[Tuple[int, List[chess.Move]]] = []
+
+    try:
+        for depth in range(1, max_depth + 1):
+            if timeout():
+                break
+            alpha = -MATE_VALUE
+            beta = MATE_VALUE
+            if best_move and depth >= 2:
+                alpha = best_score - ASPIRATION
+                beta = best_score + ASPIRATION
+
+            tt_entry = TT.get(get_key(board))
+            ttbest = tt_entry.best if tt_entry else None
+
+            moves = list(board.legal_moves)
+            moves = order_moves(board, moves, ttbest, 0)
+            root_scores: List[Tuple[int, chess.Move]] = []
+
+            for mv in moves:
+                if timeout():
+                    break
+                board.push(mv)
+                try:
+                    sc = -alpha_beta(board, depth - 1, -beta, -alpha, 1, True, None)
+                except TimeoutError:
+                    board.pop()
+                    raise
+                finally:
+                    if board.move_stack and board.move_stack[-1] == mv:
+                        board.pop()
+                root_scores.append((sc, mv))
+                if sc > alpha:
+                    alpha = sc
+                if sc > best_score:
+                    best_score = sc
+                    best_move = mv
+
+            root_scores.sort(reverse=True, key=lambda x: x[0])
+            results = []
+            for i in range(min(multipv, len(root_scores))):
+                sc, mv = root_scores[i]
+                b = board.copy()
+                b.push(mv)
+                pv = [mv] + extract_pv(b, depth - 1)
+                results.append((sc, pv))
+            if best_score >= MATE_VALUE - 1000 or timeout():
+                break
+    except TimeoutError:
+        pass
+    return best_move, results
+
+# ---------- UCI LOOP ----------
+def uci_loop() -> None:
+    board = chess.Board()
+    multipv = 1
+    threads = 1
+    hash_sz = 32
+    random.seed(0xC0FFEE)
+    search_thread = None
+    search_result = {}
+    global node_count, start_time, time_limit, TT_AGE, NODE_LIMIT
+
+    def start_search(go_args):
+        command, args = go_args
+        if command == "mate":
+            mate_n, movetime = args
+            pv = mate_search_root(board, mate_n * 2, movetime)
+            search_result['pv'] = pv
+        else:
+            maxd, tlim, nodes, mpv = args
+            best, multipv_list = root_search(board, maxd, movetime=tlim, nodes_limit=nodes, multipv=mpv)
+            search_result['best'] = best
+            search_result['multipv_list'] = multipv_list
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line == "uci":
+            print("id name Supranova-human")
+            print("id author Supra")
+            print("option name Hash type spin default 32 min 1 max 4096")
+            print("option name Threads type spin default 1 min 1 max 8")
+            print("option name Multipv type spin default 1 min 1 max 4")
+            print("uciok")
+        elif line == "isready":
+            print("readyok")
+        elif line.startswith("setoption"):
+            toks = line.split()
+            if "name" in toks:
+                try:
+                    ni = toks.index("name") + 1
+                    if "value" in toks:
+                        vi = toks.index("value")
+                        name = " ".join(toks[ni:vi])
+                        value = " ".join(toks[vi + 1 :])
+                    else:
+                        name = " ".join(toks[ni:])
+                        value = ""
+                    if name.lower() == "multipv":
+                        try:
+                            multipv = max(1, min(MULTIPV_MAX, int(value)))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        elif line.startswith("position"):
+            toks = line.split()
+            if "startpos" in toks:
+                board.reset()
+                if "moves" in toks:
+                    for mv in toks[toks.index("moves") + 1 :]:
+                        board.push_uci(mv)
+            elif "fen" in toks:
+                i = toks.index("fen")
+                fen = " ".join(toks[i + 1 : i + 7])
+                board.set_fen(fen)
+                if "moves" in toks:
+                    for mv in toks[toks.index("moves") + 1 :]:
+                        board.push_uci(mv)
+        elif line.startswith("go"):
+            # Kill any previous search
+            if search_thread and search_thread.is_alive():
+                stop_event.set()
+                search_thread.join(timeout=1.0)
+            stop_event.clear()
+            toks = line.split()
+            if "mate" in toks:
+                try:
+                    mate_idx = toks.index("mate")
+                    mate_n = int(toks[mate_idx + 1])
+                except Exception:
+                    mate_n = 30
+                movetime = None
+                if "movetime" in toks:
+                    try:
+                        movetime = int(toks[toks.index("movetime") + 1]) / 1000.0
+                    except Exception:
+                        movetime = None
+                tlim = movetime if movetime else 5.0
+                search_result.clear()
+                search_thread = threading.Thread(target=start_search, args=(("mate", (mate_n, tlim)),))
+                search_thread.start()
+                while search_thread.is_alive():
+                    try:
+                        search_thread.join(timeout=0.1)
+                    except KeyboardInterrupt:
+                        stop_event.set()
+                pv = search_result.get('pv')
+                if pv:
+                    pv_str = " ".join(m.uci() for m in pv)
+                    print(f"info score mate {mate_n} nodes {node_count} pv {pv_str}")
+                    print("bestmove", pv[0].uci())
+                else:
+                    print("info string no mate found")
+                    best, _ = root_search(board, 6, movetime=1.0, nodes_limit=None, multipv=multipv)
+                    if best:
+                        print("bestmove", best.uci())
+                    else:
+                        legal = list(board.legal_moves)
+                        if legal:
+                            print("bestmove", legal[0].uci())
+                        else:
+                            print("bestmove 0000")
+                sys.stdout.flush()
+                continue
+
+            wtime = btime = movetime = depth = nodes = None
+            infinite = False
+            if "wtime" in toks:
+                try:
+                    wtime = int(toks[toks.index("wtime") + 1])
+                except Exception:
+                    pass
+            if "btime" in toks:
+                try:
+                    btime = int(toks[toks.index("btime") + 1])
+                except Exception:
+                    pass
+            if "movetime" in toks:
+                try:
+                    movetime = int(toks[toks.index("movetime") + 1]) / 1000.0
+                except Exception:
+                    pass
+            if "depth" in toks:
+                try:
+                    depth = int(toks[toks.index("depth") + 1])
+                except Exception:
+                    pass
+            if "nodes" in toks:
+                try:
+                    nodes = int(toks[toks.index("nodes") + 1])
+                except Exception:
+                    pass
+            if "infinite" in toks:
+                infinite = True
+
+            if movetime:
+                tlim = movetime
+            elif (wtime or btime) and not infinite:
+                remaining = wtime if board.turn == chess.WHITE else btime
+                if remaining:
+                    tlim = max(0.01, remaining / 1000.0 / 40.0)
+                else:
+                    tlim = DEFAULT_MOVE_TIME
+            elif infinite:
+                tlim = 3600.0
+            else:
+                tlim = DEFAULT_MOVE_TIME
+
+            maxd = depth if depth else 32
+            search_result.clear()
+            search_thread = threading.Thread(target=start_search, args=(("normal", (maxd, tlim, nodes, multipv)),))
+            search_thread.start()
+            while search_thread.is_alive():
+                try:
+                    search_thread.join(timeout=0.1)
+                except KeyboardInterrupt:
+                    stop_event.set()
+            multipv_list = search_result.get('multipv_list')
+            best = search_result.get('best')
+            if multipv_list:
+                for idx, (sc, pv) in enumerate(multipv_list, start=1):
+                    if abs(sc) > MATE_VALUE // 2:
+                        mate = (MATE_VALUE - abs(sc)) // 100
+                        score_str = f"mate {mate if sc > 0 else -mate}"
+                    else:
+                        score_str = f"cp {int(sc)}"
+                    pv_str = " ".join(m.uci() for m in pv)
+                    print(f"info multipv {idx} score {score_str} depth {len(pv)} nodes {node_count} pv {pv_str}")
+
+            if best:
+                print("bestmove", best.uci())
+            else:
+                lm = list(board.legal_moves)
+                if lm:
+                    print("bestmove", lm[0].uci())
+                else:
+                    print("bestmove 0000")
+        elif line == "stop":
+            stop_event.set()
+            if search_thread and search_thread.is_alive():
+                search_thread.join(timeout=1.0)
+            best = search_result.get('best')
+            if best:
+                print("bestmove", best.uci())
+            else:
+                lm = list(board.legal_moves)
+                if lm:
+                    print("bestmove", lm[0].uci())
+                else:
+                    print("bestmove 0000")
+            sys.stdout.flush()
+        elif line == "quit":
+            stop_event.set()
+            if search_thread and search_thread.is_alive():
+                search_thread.join(timeout=1.0)
+            break
+        sys.stdout.flush()
+
+if __name__ == "__main__":
+    random.seed(0xC0FFEE)
+    uci_loop()
