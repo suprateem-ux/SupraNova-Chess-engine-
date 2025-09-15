@@ -23,6 +23,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyright python-chess
 
-      - name: Run Pyright on supraengine
+      - name: Run Pyright on Supranova
         run: |
           pyright Supranova.py
