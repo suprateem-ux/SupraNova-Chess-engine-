@@ -35,13 +35,8 @@ jobs:
         choco install visualstudio2022buildtools --no-progress --yes --limit-output
         choco install visualstudio2022-workload-vctools --no-progress --yes --limit-output
 
-    - name: Build Executable with Nuitka
-      run: |
-        python -m nuitka supranova 
-        --onefile \
-        --lto=yes \
-        --jobs=4 \
-        --output-filename=Supranova-${{ matrix.os }}
+    - name: Build Windows executable
+      run: python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-windows-latest.exe
 
     - name: Upload Executable as Artifact
       uses: actions/upload-artifact@v4
