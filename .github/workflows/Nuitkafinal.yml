@@ -37,7 +37,7 @@ jobs:
 
     - name: Build Executable with Nuitka
       run: |
-        python -m nuitka supranova \
+        python -m nuitka supranova 
         --onefile \
         --lto=yes \
         --jobs=4 \
