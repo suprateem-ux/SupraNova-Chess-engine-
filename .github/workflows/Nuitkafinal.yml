@@ -48,32 +48,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Download Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: Supranova-ubuntu-latest
-        path: ./artifacts
-    - uses: actions/download-artifact@v4
-      with:
-        name: Supranova-windows-latest
-        path: ./artifacts
-    - uses: actions/download-artifact@v4
-      with:
-        name: Supranova-macos-latest
-        path: ./artifacts
-
-    - name: Create GitHub Release
-      id: create_release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name || 'v1.0.0' }}
-        name: Supranova Release ${{ github.ref_name || 'v1.0.0' }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Upload Release Assets
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./artifacts/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name || 'v1.0.0' }}
+          name: Supranova Releases ${{ github.ref_name || 'v1.0.0' }}
+          files: |
+            Supranova-ubuntu-latest
+            Supranova-windows-latest.exe
+            Supranova-macos-latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
