@@ -36,14 +36,7 @@ jobs:
           choco install visualstudio2022-workload-vctools --no-progress --yes --limit-output
 
       - name: Build Executable
-        run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-windows-latest.exe
-          elif [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-ubuntu-latest
-          else
-            python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-macos-latest
-          fi
+        run: python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-windows-latest.exe
 
       - name: Upload Executable as Artifact
         uses: actions/upload-artifact@v4
