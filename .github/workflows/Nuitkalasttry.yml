@@ -39,7 +39,7 @@ jobs:
 
       - name: Build Windows executable
         if: matrix.os == 'windows-latest'
-        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --output-filename=Supranova-windows-latest.exe
+        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --assume-yes-for-downloads --output-filename=Supranova-windows-latest.exe
 
       - name: Build Linux executable
         if: matrix.os == 'ubuntu-latest'
