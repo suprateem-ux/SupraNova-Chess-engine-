@@ -2,7 +2,7 @@
 
 ![SupraNova Logo](https://chessengines.blogspot.com/2021/09/first-test-chess-engine-supernova24.html)
 
-**SupraNova** is a hobbyist Python-based chess engine designed to calculate approximately 30,000 nodes per second. It is optimized for analysis and integration with UCI-compatible graphical user interfaces (GUIs).
+**SupraNova** is a hobbyist Python-based chess engine designed to calculate approximately 30,000 nodes per second. It is optimized for analysis and integration with UCI-compatible graphical user interfaces (GUIs).Available in [official releases](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.6)
 
 > ⚠️ **Important Note:** `ponder=true` does **not** work reliably with `go infinite` mode, especially when paired with `stop` or `quit`. It is recommended to always use `ponder=false` for stable operation.
 
