@@ -6,7 +6,10 @@ on:
       - 'Supranova.py' 
       - 'supranova' # triggers only if file changes
   workflow_dispatch:
-
+  
+permissions:
+  contents: write
+  
 jobs:
   build:
     runs-on: ${{ matrix.os }}
