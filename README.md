@@ -27,7 +27,7 @@ git clone https://github.com/suprateem-ux/SupraNova-Chess-engine-
 cd SupraNova-Chess-engine-
 chmod +x supranova
 ```
-BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x 
+BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x , then u dont need the previous methods u can just download them from [here](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.6)
 Here you go, 
 ```bash
 chmod +x Supranova-ubuntu-latest
