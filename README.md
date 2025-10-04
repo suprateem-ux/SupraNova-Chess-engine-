@@ -28,7 +28,13 @@ cd SupraNova-Chess-engine-
 chmod +x supranova
 ```
 BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x 
-
+Here you go, 
+```bash
+chmod +x Supranova-ubuntu-latest
+```
+```bash
+chmod +x Supranova-macos-latest
+```
 Ignore it in non ubuntu systems
 ## UCI Options
 
