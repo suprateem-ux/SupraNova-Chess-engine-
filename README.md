@@ -25,8 +25,9 @@
 ```bash
 git clone https://github.com/suprateem-ux/SupraNova-Chess-engine-
 cd SupraNova-Chess-engine-
-chmod +x Supranova_(executable)
+chmod +x supranova
 ```
+BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x 
 Ignore last step in non ubuntu systems
 ## UCI Options
 
