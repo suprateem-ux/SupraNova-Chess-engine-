@@ -37,7 +37,7 @@ jobs:
 
       - name: Build Windows executable
         if: matrix.os == 'windows-latest'
-        run: python -m nuitka supranova --onefile --lto=yes --jobs=4 --windows-dependency-walker-auto-download=yes --output-filename=Supranova-windows-latest.exe
+        run: python -m nuitka supranova.py --onefile --lto=yes --jobs=4 --windows-dependency-walker-auto-download=yes --output-filename=Supranova-windows-latest.exe
 
       - name: Build Linux executable
         if: matrix.os == 'ubuntu-latest'
