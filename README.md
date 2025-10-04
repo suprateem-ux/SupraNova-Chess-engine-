@@ -28,7 +28,8 @@ cd SupraNova-Chess-engine-
 chmod +x supranova
 ```
 BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x 
-Ignore last step in non ubuntu systems
+
+Ignore it in non ubuntu systems
 ## UCI Options
 
 | Option Name | Type | Default | Min | Max | Description |
