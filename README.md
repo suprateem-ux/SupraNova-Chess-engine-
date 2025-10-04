@@ -62,7 +62,7 @@ The engine supports several UCI `go` parameters for flexible searching:
 | movetime    | int  | Search for a fixed duration (ms). Overrides time control. |
 | depth       | int  | Maximum search depth in plies. |
 | nodes       | int  | Maximum number of nodes to search. |
-| infinite    | flag | Search indefinitely until a `stop` command is received. | #sorry , it doesnt work but can be bypassed by ponder = false
+| infinite    | flag | Search indefinitely until a `stop` command is received. | sorry , it doesnt work but can be bypassed by ponder = false
 | mate        | int  | Search for a mate in N moves. |
 
 **Example UCI commands:**
@@ -77,5 +77,4 @@ setoption name Multipv value 2
 go depth 20
 go movetime 5000
 go wtime 300000 btime 300000
-go infinite
 go mate 3
