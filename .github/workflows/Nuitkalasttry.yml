@@ -35,10 +35,11 @@ jobs:
         run: |
           choco install visualstudio2022buildtools --no-progress --yes --limit-output
           choco install visualstudio2022-workload-vctools --no-progress --yes --limit-output
+          pip install nuitka[msvc]
 
       - name: Build Windows executable
         if: matrix.os == 'windows-latest'
-        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --windows-dependency-walker-auto-download=yes --output-filename=Supranova-windows-latest.exe
+        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --output-filename=Supranova-windows-latest.exe
 
       - name: Build Linux executable
         if: matrix.os == 'ubuntu-latest'
