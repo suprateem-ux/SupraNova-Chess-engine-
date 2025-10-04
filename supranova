@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np 
 import chess
 import threading
 
@@ -77,70 +78,75 @@ PIECE_VALUE = {
 
 # Phase-dependent PSTs (White's perspective, mirror for Black)
 PST_MG = {
-    chess.PAWN: [
-         0,   0,   0,   0,   0,   0,   0,   0,
-        80,  90, 100, 110, 110, 100,  90,  80,
-        20,  25,  30,  40,  40,  30,  25,  20,
-        10,  15,  20,  35,  35,  20,  15,  10,
-         5,  10,  15,  25,  25,  15,  10,   5,
-         3,  -5, -10,   0,   0, -10,  -5,   3,
-         3,   5,   5, -20, -20,   5,   5,   3,
-         0,   0,   0,   0,   0,   0,   0,   0,
-    ],
-    chess.KNIGHT: [
-        -80, -60, -40, -40, -40, -40, -60, -80,
-        -60, -20,   5,  10,  10,   5, -20, -60,
-        -40,   5,  20,  30,  30,  20,   5, -40,
-        -40,  10,  30,  40,  40,  30,  10, -40,
-        -40,  10,  30,  40,  40,  30,  10, -40,
-        -40,   5,  20,  30,  30,  20,   5, -40,
-        -60, -20,   5,  10,  10,   5, -20, -60,
-        -80, -60, -40, -40, -40, -40, -60, -80,
-    ],
-    chess.BISHOP: [
-        -30, -20, -20, -20, -20, -20, -20, -30,
-        -20,  15,   0,   0,   0,   0,  15, -20,
-        -20,  20,  10,  15,  15,  10,  20, -20,
-        -20,   5,  15,  20,  20,  15,   5, -20,
-        -20,  10,  15,  20,  20,  15,  10, -20,
-        -20,  10,  10,  15,  15,  10,  10, -20,
-        -20,  10,   0,   0,   0,   0,  10, -20,
-        -30, -20, -20, -20, -20, -20, -20, -30,
-    ],
-    chess.ROOK: [
-         0,   0,   5,  10,  10,   5,   0,   0,
-        -5,   0,   0,   0,   0,   0,   0,  -5,
-        -5,   0,   0,   0,   0,   0,   0,  -5,
-        -5,   0,   0,   0,   0,   0,   0,  -5,
-        -5,   0,   0,   0,   0,   0,   0,  -5,
-        -5,   0,   0,   0,   0,   0,   0,  -5,
-         5,  10,  10,  15,  15,  10,  10,   5,
-         0,   0,   0,   0,   0,   0,   0,   0,
-    ],
-    chess.QUEEN: [
-        -20, -10, -10,  -5,  -5, -10, -10, -20,
-        -10,   0,   5,   0,   0,   5,   0, -10,
-        -10,   5,   5,   5,   5,   5,   5, -10,
-         -5,   0,   5,   5,   5,   5,   0,  -5,
-          0,   0,   5,   5,   5,   5,   0,  -5,
-        -10,   5,   5,   5,   5,   5,   0, -10,
-        -10,   0,   5,   0,   0,   0,   0, -10,
-        -20, -10, -10,  -5,  -5, -10, -10, -20,
-    ],
-    chess.KING: [
-        -40, -50, -50, -60, -60, -50, -50, -40,
-        -40, -50, -50, -60, -60, -50, -50, -40,
-        -40, -50, -50, -60, -60, -50, -50, -40,
-        -40, -50, -50, -60, -60, -50, -50, -40,
-        -30, -40, -40, -50, -50, -40, -40, -30,
-        -20, -30, -30, -30, -30, -30, -30, -20,
-         20,  20,   0,   0,   0,   0,  20,  20,
-         20,  30,  10,   0,   0,  10,  30,  20,
-    ],
+    chess.PAWN: np.array([
+        0,   0,   0,   0,   0,   0,   0,   0,
+       78,  83,  86,  73, 102,  82,  85,  90,
+        7,  29,  21,  44,  40,  31,  44,   7,
+      -17,  16,  -2,  15,  14,   0,  15, -13,
+      -26,   3,  10,   9,   6,   1,   0, -23,
+      -22,   9,   5, -11, -10,  -2,   3, -19,
+      -31,   8,  -7, -37, -36, -14,   3, -31,
+        0,   0,   0,   0,   0,   0,   0,   0
+    ]).reshape(8, 8),
+
+    chess.KNIGHT: np.array([
+      -66, -53, -75, -75, -10, -55, -58, -70,
+       -3,  -6, 100, -36,   4,  62,  -4, -14,
+       10,  67,   1,  74,  73,  27,  62,  -2,
+       24,  24,  45,  37,  33,  41,  25,  17,
+       -1,   5,  31,  21,  22,  35,   2,   0,
+      -18,  10,  13,  22,  18,  15,  11, -14,
+      -23, -15,   2,   0,   2,   0, -23, -20,
+      -74, -23, -26, -24, -19, -35, -22, -69
+    ]).reshape(8, 8),
+
+    chess.BISHOP: np.array([
+      -59, -78, -82, -76, -23,-107, -37, -50,
+      -11,  20,  35, -42, -39,  31,   2, -22,
+       -9,  39, -32,  41,  52, -10,  28, -14,
+       25,  17,  20,  34,  26,  25,  15,  10,
+       13,  10,  17,  23,  17,  16,   0,   7,
+       14,  25,  24,  15,   8,  25,  20,  15,
+       19,  20,  11,   6,   7,   6,  20,  16,
+       -7,   2, -15, -12, -14, -15, -10, -10
+    ]).reshape(8, 8),
+
+    chess.ROOK: np.array([
+       35,  29,  33,   4,  37,  33,  56,  50,
+       55,  29,  56,  67,  55,  62,  34,  60,
+       19,  35,  28,  33,  45,  27,  25,  15,
+        0,   5,  16,  13,  18,  -4,  -9,  -6,
+      -28, -35, -16, -21, -13, -29, -46, -30,
+      -42, -28, -42, -25, -25, -35, -26, -46,
+      -53, -38, -31, -26, -29, -43, -44, -53,
+      -30, -24, -18,   5,  -2, -18, -31, -32
+    ]).reshape(8, 8),
+
+    chess.QUEEN: np.array([
+        6,   1,  -8,-104,  69,  24,  88,  26,
+       14,  32,  60, -10,  20,  76,  57,  24,
+       -2,  43,  32,  60,  72,  63,  43,   2,
+        1, -16,  22,  17,  25,  20, -13,  -6,
+      -14, -15,  -2,  -5,  -1, -10, -20, -22,
+      -30,  -6, -13, -11, -16, -11, -16, -27,
+      -36, -18,   0, -19, -15, -15, -21, -38,
+      -39, -30, -31, -13, -31, -36, -34, -42
+    ]).reshape(8, 8),
+
+    chess.KING: np.array([
+        4,  54,  47, -99, -99,  60,  83, -62,
+      -32,  10,  55,  56,  56,  55,  10,   3,
+      -62,  12, -57,  44, -67,  28,  37, -31,
+      -55,  50,  11,  -4, -19,  13,   0, -49,
+      -55, -43, -52, -28, -51, -47,  -8, -50,
+      -47, -42, -43, -79, -64, -32, -29, -32,
+       -4,   3, -14, -50, -57, -18,  13,   4,
+       17,  30,  -3, -14,   6,  -1,  40,  18
+    ]).reshape(8, 8),
 }
 
 PST_EG = {
-    chess.PAWN: [
+    chess.PAWN: np.array([
          0,   0,   0,   0,   0,   0,   0,   0,
         80,  90, 100, 110, 110, 100,  90,  80,
         30,  40,  50,  60,  60,  50,  40,  30,
@@ -149,8 +155,8 @@ PST_EG = {
         10,  10,  15,  25,  25,  15,  10,  10,
          0,   0,   0,   0,   0,   0,   0,   0,
          0,   0,   0,   0,   0,   0,   0,   0,
-    ],
-    chess.KNIGHT: [
+    ]).reshape(8, 8),
+    chess.KNIGHT: np.array([
         -60, -50, -40, -40, -40, -40, -50, -60,
         -50, -40,   0,   0,   0,   0, -40, -50,
         -40,   0,  10,  15,  15,  10,   0, -40,
@@ -159,8 +165,8 @@ PST_EG = {
         -40,   0,  10,  15,  15,  10,   0, -40,
         -50, -40,   0,   0,   0,   0, -40, -50,
         -60, -50, -40, -40, -40, -40, -50, -60,
-    ],
-    chess.BISHOP: [
+    ]).reshape(8, 8),
+    chess.BISHOP: np.array([
         -20, -10, -10, -10, -10, -10, -10, -20,
         -10,  10,   0,   0,   0,   0,  10, -10,
         -10,  10,  10,  10,  10,  10,  10, -10,
@@ -169,8 +175,8 @@ PST_EG = {
         -10,   0,   5,  10,  10,   5,   0, -10,
         -10,   0,   0,   0,   0,   0,   0, -10,
         -20, -10, -10, -10, -10, -10, -10, -20,
-    ],
-    chess.ROOK: [
+    ]).reshape(8, 8),
+    chess.ROOK: np.array([
          0,   0,   5,  10,  10,   5,   0,   0,
          5,  10,  10,  15,  15,  10,  10,   5,
          0,   0,   5,  10,  10,   5,   0,   0,
@@ -179,8 +185,8 @@ PST_EG = {
         -5,   0,   0,   0,   0,   0,   0,  -5,
         -5,   0,   0,   0,   0,   0,   0,  -5,
          0,   0,   0,   0,   0,   0,   0,   0,
-    ],
-    chess.QUEEN: [
+    ]).reshape(8, 8),
+    chess.QUEEN: np.array([
         -20, -10, -10,  -5,  -5, -10, -10, -20,
         -10,   0,   5,   0,   0,   5,   0, -10,
         -10,   5,   5,   5,   5,   5,   5, -10,
@@ -189,8 +195,8 @@ PST_EG = {
         -10,   5,   5,   5,   5,   5,   0, -10,
         -10,   0,   5,   0,   0,   0,   0, -10,
         -20, -10, -10,  -5,  -5, -10, -10, -20,
-    ],
-    chess.KING: [
+    ]).reshape(8, 8),
+    chess.KING: np.array([
         -10, -10, -10, -10, -10, -10, -10, -10,
          10,  20,  20,  20,  20,  20,  20,  10,
          10,  20,  30,  30,  30,  30,  20,  10,
@@ -199,7 +205,7 @@ PST_EG = {
          10,  20,  30,  30,  30,  30,  20,  10,
          10,  10,  10,  10,  10,  10,  10,  10,
          0,   0,   0,   0,   0,   0,   0,   0,
-    ],
+    ]).reshape(8, 8),
 }
 
 # Phase weights (similar to Stockfish)
@@ -221,8 +227,13 @@ def get_phase(board: chess.Board) -> int:
 
 def interpolate_pst(board: chess.Board, pt: int, sq: int, color: bool) -> int:
     phase = get_phase(board)
-    mg = PST_MG[pt][sq if color == chess.WHITE else chess.square_mirror(sq)]
-    eg = PST_EG[pt][sq if color == chess.WHITE else chess.square_mirror(sq)]
+    if color == chess.WHITE:
+        r, f = chess.square_rank(sq), chess.square_file(sq)
+    else:
+        mirrored = chess.square_mirror(sq)
+        r, f = chess.square_rank(mirrored), chess.square_file(mirrored)
+    mg = PST_MG[pt][r, f]
+    eg = PST_EG[pt][r, f]
     score = ((mg * (PHASE_MAX - phase)) + (eg * phase)) // PHASE_MAX
     return score
 
@@ -540,6 +551,48 @@ def pawn_structure_hash(board):
     PAWN_HASH[key] = score_white
     return score_white
 
+def is_outpost(board, sq, color):
+    rank = chess.square_rank(sq)
+    file = chess.square_file(sq)
+    if color == chess.WHITE and rank >= 3:
+        for df in [-1, 1]:
+            f = file + df
+            if 0 <= f < 8:
+                for r in range(rank, 8):
+                    if chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK):
+                        return False
+        return True
+    if color == chess.BLACK and rank <= 4:
+        for df in [-1, 1]:
+            f = file + df
+            if 0 <= f < 8:
+                for r in range(rank, -1, -1):
+                    if chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE):
+                        return False
+        return True
+    return False
+
+def is_open_file(board, file, color):
+    own_pawns = board.pieces(chess.PAWN, color)
+    enemy_pawns = board.pieces(chess.PAWN, not color)
+    for r in range(8):
+        sq = chess.square(file, r)
+        if sq in own_pawns:
+            return False
+    for r in range(8):
+        sq = chess.square(file, r)
+        if sq in enemy_pawns:
+            return False
+    return True
+
+def is_semi_open_file(board, file, color):
+    own_pawns = board.pieces(chess.PAWN, color)
+    for r in range(8):
+        sq = chess.square(file, r)
+        if sq in own_pawns:
+            return False
+    return True
+
 def evaluate(board: chess.Board) -> int:
     score_white = 0
 
@@ -549,14 +602,14 @@ def evaluate(board: chess.Board) -> int:
         b_count = len(board.pieces(pt, chess.BLACK))
         score_white += val * (w_count - b_count)
         for s in board.pieces(pt, chess.WHITE):
-            pst_bonus = interpolate_pst(board, pt, s, chess.WHITE) // 2
+            pst_bonus = interpolate_pst(board, pt, s, chess.WHITE)
             # Bishop pair PST adjustment: bonus for central squares if 2 bishops
             if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
                 if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
                     pst_bonus += 10
             score_white += pst_bonus
         for s in board.pieces(pt, chess.BLACK):
-            pst_bonus = interpolate_pst(board, pt, s, chess.BLACK) // 2
+            pst_bonus = interpolate_pst(board, pt, s, chess.BLACK)
             if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
                 if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
                     pst_bonus += 10
@@ -588,27 +641,6 @@ def evaluate(board: chess.Board) -> int:
         score_white -= 35
 
     # --- Outpost Bonus (N/B on advanced square, not attackable by enemy pawns) ---
-    def is_outpost(board, sq, color):
-        rank = chess.square_rank(sq)
-        file = chess.square_file(sq)
-        if color == chess.WHITE and rank >= 3:
-            for df in [-1, 1]:
-                f = file + df
-                if 0 <= f < 8:
-                    for r in range(rank, 8):
-                        if chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK):
-                            return False
-            return True
-        if color == chess.BLACK and rank <= 4:
-            for df in [-1, 1]:
-                f = file + df
-                if 0 <= f < 8:
-                    for r in range(rank, -1, -1):
-                        if chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE):
-                            return False
-            return True
-        return False
-
     for sq in board.pieces(chess.KNIGHT, chess.WHITE):
         if is_outpost(board, sq, chess.WHITE):
             score_white += 18
@@ -626,27 +658,6 @@ def evaluate(board: chess.Board) -> int:
     score_white += pawn_structure_hash(board)
 
     # --- Rook on 7th/8th, open/semi-open files ---
-    def is_open_file(board, file, color):
-        own_pawns = board.pieces(chess.PAWN, color)
-        enemy_pawns = board.pieces(chess.PAWN, not color)
-        for r in range(8):
-            sq = chess.square(file, r)
-            if sq in own_pawns:
-                return False
-        for r in range(8):
-            sq = chess.square(file, r)
-            if sq in enemy_pawns:
-                return False
-        return True
-
-    def is_semi_open_file(board, file, color):
-        own_pawns = board.pieces(chess.PAWN, color)
-        for r in range(8):
-            sq = chess.square(file, r)
-            if sq in own_pawns:
-                return False
-        return True
-
     for sq in board.pieces(chess.ROOK, chess.WHITE):
         rank = chess.square_rank(sq)
         file = chess.square_file(sq)
@@ -736,7 +747,6 @@ def evaluate(board: chess.Board) -> int:
 
     # --- Return for side to move ---
     return score_white if board.turn == chess.WHITE else -score_white
-
 # ---------- QUIESCENCE ----------
 def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
     global node_count
