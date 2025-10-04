@@ -2,7 +2,7 @@
 
 ![SupraNova Logo](https://chessengines.blogspot.com/2021/09/first-test-chess-engine-supernova24.html)
 
-**SupraNova** is a hobbyist Python-based chess engine designed to calculate approximately 30,000 nodes per second. It is optimized for analysis and integration with UCI-compatible graphical user interfaces (GUIs).Available in [official releases](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.6)
+**SupraNova** is a hobbyist Python-based chess engine designed to calculate approximately 30,000 nodes per second. It is optimized for analysis and integration with UCI-compatible graphical user interfaces (GUIs).Available in [official releases](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.8)
 
 > ⚠️ **Important Note:** `ponder=true` does **not** work reliably with `go infinite` mode, especially when paired with `stop` or `quit`. It is recommended to always use `ponder=false` for stable operation.
 
@@ -27,7 +27,7 @@ git clone https://github.com/suprateem-ux/SupraNova-Chess-engine-
 cd SupraNova-Chess-engine-
 chmod +x supranova
 ```
-BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x , then u dont need the previous methods u can just download them from [here](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.6)
+BUT I WILL RECOMMEND USING THE BINARIES FROM OFFICIAL RELEASES AS ABOVE AND EVERYTHING EXCEPT WINDOWS REQUIRE chmod +x , then u dont need the previous methods u can just download them from [here](https://github.com/suprateem-ux/SupraNova-Chess-engine-/releases/tag/v1.0.8)
 Here you go, 
 ```bash
 chmod +x Supranova-ubuntu-latest
