@@ -12,7 +12,7 @@
 
 - **UCI-Compatible**: Seamlessly integrates with UCI-compatible GUIs like Arena, Cute Chess, and Lichess bots.  
 - **Python Implementation**: Written entirely in Python, making it accessible and modifiable.  
-- **Performance**: Capable of calculating around 30,000 nodes per second.  
+- **Performance**: Capable of calculating around 30,000 nodes per second, often blunders mate and ttactics.
 - **Evaluation Functions**: Includes advanced evaluation metrics for piece-square tables, mobility, king safety, and more.  
 - **Search Algorithms**: Implements alpha-beta pruning with a transposition table for efficient search.
 
