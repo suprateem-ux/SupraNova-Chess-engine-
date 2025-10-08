@@ -318,93 +318,137 @@ def see_safe(board: chess.Board, move: chess.Move) -> int:
     except Exception:
         return 0
 
+# ---------- Sliding attack helpers ----------
+def ray_attacks(square, deltas, occ):
+    attacks = 0
+    for d in deltas:
+        sq = square
+        while True:
+            prev_file = sq % 8
+            sq += d
+            if sq < 0 or sq > 63:
+                break
+            new_file = sq % 8
+            # If moving left/right and file changed by more than 1, it's a wrap
+            if abs(new_file - prev_file) > 1:
+                break
+            attacks |= 1 << sq
+            if occ & (1 << sq):
+                break
+    return attacks
+
+def bishop_attacks(square, occ):
+    return ray_attacks(square, [9, 7, -9, -7], occ)
+
+def rook_attacks(square, occ):
+    return ray_attacks(square, [8, -8, 1, -1], occ)
+
+def queen_attacks(square, occ):
+    return bishop_attacks(square, occ) | rook_attacks(square, occ)
+
+# ---------- SEE function ----------
 def see(board: chess.Board, move: chess.Move) -> int:
     if not board.is_capture(move) and not move.promotion:
         return 0
 
-    pbb = PosBB(board)
-    to_sq = move.to_square
-    from_sq = move.from_square
     side = board.turn
+    from_sq = move.from_square
+    to_sq = move.to_square
 
+    occ = int(board.occupied)
+
+    pieces = {
+        chess.WHITE: {pt: int(board.pieces(pt, chess.WHITE)) for pt in PIECE_VALUE},
+        chess.BLACK: {pt: int(board.pieces(pt, chess.BLACK)) for pt in PIECE_VALUE},
+    }
+
+    # Victim square and value
     if board.is_en_passant(move):
         victim_sq = to_sq + (-8 if side == chess.WHITE else 8)
-        victim_piece_type = chess.PAWN
-    else:
-        victim_piece = board.piece_at(to_sq)
-        victim_sq = to_sq
-        victim_piece_type = victim_piece.piece_type if victim_piece else None
-
-    victim_value = PIECE_VALUE.get(victim_piece_type, 0) if victim_piece_type else 0
-
-    attackers_white = pbb.attackers_bb(chess.WHITE, to_sq)
-    attackers_black = pbb.attackers_bb(chess.BLACK, to_sq)
-
-    mover = board.piece_at(from_sq)
-    if mover:
-        if mover.color == chess.WHITE:
-            attackers_white &= ~(1 << from_sq)
-        else:
-            attackers_black &= ~(1 << from_sq)
-
-    occ = pbb.occ
-    occ &= ~(1 << from_sq)
-    occ |= 1 << to_sq
-    if board.is_en_passant(move):
+        victim_value = PIECE_VALUE[chess.PAWN]
+        pieces[not side][chess.PAWN] &= ~(1 << victim_sq)
         occ &= ~(1 << victim_sq)
+    else:
+        victim_sq = to_sq
+        victim = board.piece_at(to_sq)
+        victim_value = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
 
-    try:
-        b = board.copy(stack=False)
-    except TypeError:
-        b = board.copy()
+    # Remove moving piece
+    moving_piece = board.piece_at(from_sq)
+    if moving_piece is None:
+        return 0  # Invalid move
+    moving_pt = moving_piece.piece_type
+    moving_color = moving_piece.color
+    pieces[moving_color][moving_pt] &= ~(1 << from_sq)
+    occ &= ~(1 << from_sq)
+    occ |= (1 << to_sq)
 
-    try:
-        b.push(move)
-    except Exception:
-        return see_safe(board, move)
+    gains = [victim_value]
+    stm = not side  # side to move next
 
-    gains: List[int] = [victim_value]
-    side_to_move = not side
+    # Pawn attack helper
+    def pawn_attackers(square, color, pawns):
+        if color == chess.WHITE:
+            return pawns & chess.BB_PAWN_ATTACKS[chess.BLACK][square]
+        else:
+            return pawns & chess.BB_PAWN_ATTACKS[chess.WHITE][square]
 
+    # All attackers
+    def all_attackers(color, occ):
+        att = 0
+        att |= pawn_attackers(to_sq, color, pieces[color][chess.PAWN])
+        att |= chess.BB_KNIGHT_ATTACKS[to_sq] & pieces[color][chess.KNIGHT]
+        att |= bishop_attacks(to_sq, occ) & pieces[color][chess.BISHOP]
+        att |= rook_attacks(to_sq, occ) & pieces[color][chess.ROOK]
+        att |= queen_attacks(to_sq, occ) & pieces[color][chess.QUEEN]
+        att |= chess.BB_KING_ATTACKS[to_sq] & pieces[color][chess.KING]
+        return att
+
+    # Main SEE loop
     while True:
-        attackers = list(b.attackers(side_to_move, to_sq))
-        if not attackers:
+        atks = all_attackers(stm, occ)
+        if not atks:
             break
-        best_sq = attackers[0]
-        piece = b.piece_at(best_sq)
-        best_val = PIECE_VALUE.get(piece.piece_type, 0) if piece else 0
-        for a in attackers:
-            piece_a = b.piece_at(a)
-            pv = PIECE_VALUE.get(piece_a.piece_type, 0) if piece_a else 0
-            if pv < best_val:
-                best_val = pv
-                best_sq = a
-        cap_move = chess.Move(best_sq, to_sq)
-        if cap_move not in b.legal_moves:
+        # Least valuable attacker
+        for pt in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
+            bb = pieces[stm][pt] & atks
+            if bb:
+                sq = (bb & -bb).bit_length() - 1
+                pieces[stm][pt] &= ~(1 << sq)
+                occ &= ~(1 << sq)
+                gains.append(PIECE_VALUE[pt] - gains[-1])
+                stm = not stm
+                break
+        else:
             break
-        captured_now = b.piece_at(to_sq)
-        captured_now_val = PIECE_VALUE.get(captured_now.piece_type, 0) if captured_now else 0
-        gains.append(captured_now_val - gains[-1])
-        try:
-            b.push(cap_move)
-        except Exception:
-            break
-        side_to_move = not side_to_move
 
+    # Negamax propagation
     for i in range(len(gains) - 2, -1, -1):
         gains[i] = max(-gains[i + 1], gains[i])
+
     return gains[0] if gains else 0
+
 
 # ---------- MOVE ORDERING ----------
 def mvv_lva_score(board: chess.Board, move: chess.Move) -> int:
+    """Strongest practical MVV-LVA for move ordering."""
+    # Promotions that are captures: highest priority
+    if move.promotion:
+        promo_value = PIECE_VALUE.get(move.promotion, 0)
+        base = 100_000 + promo_value * 100
+        if board.is_capture(move):
+            victim = board.piece_at(move.to_square)
+            victim_value = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
+            base += victim_value * 10
+        return base
+    # Normal captures (MVV-LVA)
     if board.is_capture(move):
         victim = board.piece_at(move.to_square)
         attacker = board.piece_at(move.from_square)
-        v = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
-        a = PIECE_VALUE.get(attacker.piece_type, 0) if attacker else 0
-        return v * 100 - a
-    if move.promotion:
-        return 90_000
+        victim_value = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
+        attacker_value = PIECE_VALUE.get(attacker.piece_type, 0) if attacker else 1
+        # 10x scale is common in strong open source engines
+        return victim_value * 10 - attacker_value
     return 0
 
 def move_score(
@@ -429,7 +473,6 @@ def move_score(
     except Exception:
         pass
     return score
-
 def order_moves(
     board: chess.Board, moves: List[chess.Move], pv_move: Optional[chess.Move], ply: int
 ) -> List[chess.Move]:
@@ -753,20 +796,42 @@ def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
     if timeout():
         raise TimeoutError
     node_count += 1
+
     stand = evaluate(board)
     if stand >= beta:
         return beta
     if alpha < stand:
         alpha = stand
-    moves = [m for m in board.legal_moves if board.is_capture(m) or m.promotion]
+
+    # Delta pruning: stand-pat too low
+    if stand + FUTILITY_MARGIN < alpha:
+        return alpha
+
+    # Generate tactical moves: captures, promotions (to queen), and checks
+    moves = []
+    for m in board.legal_moves:
+        if board.is_capture(m):
+            # SEE pruning: skip hopeless captures
+            if see(board, m) < 0:
+                continue
+            moves.append(m)
+        elif m.promotion == chess.QUEEN:
+            moves.append(m)
+        else:
+            # Optionally include checks in quiescence
+            try:
+                if board.gives_check(m):
+                    moves.append(m)
+            except Exception:
+                pass
+
     if not moves:
         return stand
-    moves = order_moves(board, moves, None, 0)
+
+    if len(moves) > 1:
+        moves = order_moves(board, moves, None, 0)
+
     for m in moves:
-        if board.is_capture(m):
-            s = see(board, m)
-            if s + 50 < 0:
-                continue
         board.push(m)
         try:
             val = -quiescence(board, -beta, -alpha)
@@ -777,7 +842,7 @@ def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
         if val > alpha:
             alpha = val
     return alpha
-
+   
 # ---------- TRANSPO TABLE ----------
 TT_EXACT = 0
 TT_LOWER = 1
@@ -1125,7 +1190,7 @@ def uci_loop() -> None:
             break
         line = line.strip()
         if line == "uci":
-            print("id name Supranova-human")
+            print("id name Supranova")
             print("id author Supra")
             print("option name Hash type spin default 32 min 1 max 4096")
             print("option name Threads type spin default 1 min 1 max 8")
