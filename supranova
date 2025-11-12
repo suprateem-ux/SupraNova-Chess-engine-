@@ -792,6 +792,7 @@ def evaluate(board: chess.Board) -> int:
     return score_white if board.turn == chess.WHITE else -score_white
 # ---------- QUIESCENCE ----------
 def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
+    """Quiescence search: conservative capture pruning using see_safe()."""
     global node_count
     if timeout():
         raise TimeoutError
@@ -804,21 +805,30 @@ def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
         alpha = stand
 
     # Delta pruning: stand-pat too low
-    if stand + FUTILITY_MARGIN < alpha:
+    if stand + FUTILITY_MARGIN < alpha and not board.is_check():
         return alpha
 
-    # Generate tactical moves: captures, promotions (to queen), and checks
-    moves = []
+    # Generate tactical moves: captures, promotions (to queen), and checks.
+    moves: List[chess.Move] = []
     for m in board.legal_moves:
         if board.is_capture(m):
-            # SEE pruning: skip hopeless captures
-            if see(board, m) < 0:
+            # Prefer to evaluate capture safety with simulator SEE; prune only
+            # clearly losing captures.
+            try:
+                s = see_safe(board, m)
+            except Exception:
+                # fallback to faster SEE if simulation fails
+                try:
+                    s = see(board, m)
+                except Exception:
+                    s = 0
+            # Only skip captures that are clearly losing by margin.
+            if s < -50:
                 continue
             moves.append(m)
         elif m.promotion == chess.QUEEN:
             moves.append(m)
         else:
-            # Optionally include checks in quiescence
             try:
                 if board.gives_check(m):
                     moves.append(m)
