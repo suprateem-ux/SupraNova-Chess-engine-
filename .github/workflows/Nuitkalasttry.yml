@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - 'Supranova.py' 
-      - 'supranova' # triggers only if file changes
+    #  - 'supranova' # triggers only if file changes
   workflow_dispatch:
   
 permissions:
