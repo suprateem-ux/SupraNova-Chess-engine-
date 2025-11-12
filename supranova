@@ -278,44 +278,117 @@ class PosBB:
         return int(self.board.attackers(color, square))
 
 # ---------- STATIC EXCHANGE EVALUATION (bitboard-simulated) ----------
-def see_safe(board: chess.Board, move: chess.Move) -> int:
-    try:
-        b = board.copy()
-        b.push(move)
-        if board.is_en_passant(move):
-            captured_piece_type = chess.PAWN
-            base = PIECE_VALUE.get(captured_piece_type, 0)
-        else:
-            captured_piece = board.piece_at(move.to_square)
-            base = PIECE_VALUE.get(captured_piece.piece_type, 0) if captured_piece else 0
+# ---------- Corrected see_safe (simulation-based SEE) ----------
+_SEE_CACHE: Dict[Tuple[int, int, int], int] = {}  # optional cache: (zkey, from_sq, to_sq) -> see_value
 
-        gains: List[int] = [base]
-        side = not board.turn
+def see_safe(board: chess.Board, move: chess.Move, use_cache: bool = True) -> int:
+    """
+    Simulation-based Static Exchange Evaluation (SEE).
+    Returns centipawn material gain from performing `move`.
+    Positive => capture is (materially) winning, Negative => losing.
+
+    Implementation notes:
+    - Uses a board.copy() and pushes moves on the copy to correctly simulate captures.
+    - Follows classic engine pattern: gains[0] = victim_value, then each attacker append
+      attacker_value - gains[-1], then minimax-backpropagate with gains[i] = max(-gains[i+1], gains[i]).
+    - Handles en-passant specially.
+    - Optional small cache keyed by zobrist (or fen hash fallback) and from/to squares.
+    """
+
+    try:
+        # cheap exits
+        if not board.is_capture(move) and move.promotion is None:
+            return 0
+
+        # cache key (if available)
+        try:
+            zkey = board.zobrist_hash()  # type: ignore[attr-defined]
+        except AttributeError:
+            zkey = hash(board.fen())
+
+        cache_key = (zkey, move.from_square, move.to_square)
+        if use_cache and cache_key in _SEE_CACHE:
+            return _SEE_CACHE[cache_key]
+
+        # local alias to your PIECE_VALUE
+        PV = PIECE_VALUE
+
+        b = board.copy()  # simulation board
+
+        to_sq = move.to_square
+        from_sq = move.from_square
+        us = board.turn  # side making the initial move
+
+        # Determine initial victim value (on the original board, but handle en-passant)
+        if board.is_en_passant(move):
+            # victim is the pawn captured en-passant; its square is behind the to_sq relative to us
+            victim_sq = to_sq + (-8 if us == chess.WHITE else 8)
+            victim_value = PV[chess.PAWN]
+        else:
+            victim = board.piece_at(to_sq)
+            victim_value = PV.get(victim.piece_type, 0) if victim else 0
+
+        # Prepare gains list: first entry is the value of what we capture immediately
+        gains: List[int] = [victim_value]
+
+        # Make the initial move on the copy (this places our piece on to_sq and removes victim)
+        b.push(move)
+
+        # side to move next in the simulation (opponent)
+        side = not us
+
+        # Main loop: find least valuable attacker for `to_sq`, simulate capture, repeat
         while True:
-            attackers = list(b.attackers(side, move.to_square))
+            attackers = list(b.attackers(side, to_sq))
             if not attackers:
                 break
-            best_sq = attackers[0]
-            piece = b.piece_at(best_sq)
-            best_val = PIECE_VALUE.get(piece.piece_type, 0) if piece else 0
+
+            # choose least valuable attacker (best_sq)
+            best_sq = None
+            best_val = None
             for a in attackers:
-                piece_a = b.piece_at(a)
-                v = PIECE_VALUE.get(piece_a.piece_type, 0) if piece_a else 0
-                if v < best_val:
+                p = b.piece_at(a)
+                if p is None:
+                    continue
+                v = PV.get(p.piece_type, 0)
+                if best_val is None or v < best_val:
                     best_val = v
                     best_sq = a
-            cap_move = chess.Move(best_sq, move.to_square)
+
+            if best_sq is None:
+                break
+
+            cap_move = chess.Move(best_sq, to_sq)
+            # If that capture isn't legal in the simulated board, stop (pins, discovered issues)
             if cap_move not in b.legal_moves:
                 break
-            captured_now = b.piece_at(move.to_square)
-            captured_now_val = PIECE_VALUE.get(captured_now.piece_type, 0) if captured_now else 0
-            gains.append(captured_now_val - gains[-1])
+
+            # value of the attacker capturing now
+            attacker_piece = b.piece_at(best_sq)
+            attacker_val = PV.get(attacker_piece.piece_type, 0) if attacker_piece else 0
+
+            # Append attacker value minus last gain (engine pattern)
+            gains.append(attacker_val - gains[-1])
+
+            # perform the capture on the simulation board
             b.push(cap_move)
+
+            # alternate side
             side = not side
+
+        # Minimax-style back-propagation to compute net result for the side who started the capture
         for i in range(len(gains) - 2, -1, -1):
             gains[i] = max(-gains[i + 1], gains[i])
-        return gains[0] if gains else 0
+
+        result = gains[0] if gains else 0
+
+        if use_cache:
+            _SEE_CACHE[cache_key] = result
+
+        return result
+
     except Exception:
+        # on any unexpected issue, return 0 (safe fallback)
         return 0
 
 # ---------- Sliding attack helpers ----------
