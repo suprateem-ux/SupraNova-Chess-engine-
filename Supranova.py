@@ -926,12 +926,12 @@ def alpha_beta(
 
     for i, mv in enumerate(moves):
                 # --- restricted futility pruning: only at depth == 1, and only when not in check
-        if depth == 1 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
-            if not board.is_check():
-                est = evaluate(board)
+       # if depth == 1 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
+          #  if not board.is_check():
+           #     est = evaluate(board)
                 # stronger margin required to prune at all (avoid pruning defensive moves)
-                if est + (FUTILITY_MARGIN * 2) <= alpha:
-                    continue
+             #   if est + (FUTILITY_MARGIN * 2) <= alpha:
+            #        continue
 
         reduction = 0
         if not first and depth >= 3 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
