@@ -7,7 +7,7 @@
 > ⚠️ **Important Note:** `ponder=true` does **not** work reliably with `go infinite` mode, especially when paired with `stop` or `quit`. It is recommended to always use `ponder=false` for stable operation.It should not use more than 4096 MB hash.
 ---
 
-If u are a human , you will play with this engine on [lichess](https://lichess.org/@/SupraNova_V11) , it uses this engine for human accounts 
+U CAN play with this engine on [lichess](https://lichess.org/@/SupraNova_python)
 
 ## ⚙️ Features
 
