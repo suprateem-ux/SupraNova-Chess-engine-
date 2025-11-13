@@ -866,12 +866,12 @@ def evaluate(board: chess.Board) -> int:
         else:
             score_white += penalty
 
-    # --- Check penalty ---
-    if board.is_check():
+  #   --- Check penalty ---
+        if board.is_check():
         score_white += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
 
-    # --- Return normalized score ---
-    return score_white if board.turn == chess.WHITE else -score_white
+    # --- Return normalized score (always integer) ---
+    return int(score_white if board.turn == chess.WHITE else -score_white)
 # ---------- QUIESCENCE ----------
 def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int:
     """2-ply tactical quiescence search with SEE pruning and quiet tactical extensions."""
