@@ -380,7 +380,14 @@ def see_safe(board: chess.Board, move: chess.Move, use_cache: bool = True) -> in
         for i in range(len(gains) - 2, -1, -1):
             gains[i] = max(-gains[i + 1], gains[i])
 
-        result = gains[0] if gains else 0
+        result = int(gains[0] if gains else 0)
+
+        SAFE_MARGIN = 35  # ~⅓ pawn safety margin
+        result -= SAFE_MARGIN if result < 0 else 0
+
+# Clamp absurd values (e.g., rare simulation anomalies)
+        if result > 9000 or result < -9000:
+            result = 0
 
         if use_cache:
             _SEE_CACHE[cache_key] = result
@@ -866,66 +873,79 @@ def evaluate(board: chess.Board) -> int:
     # --- Return normalized score ---
     return score_white if board.turn == chess.WHITE else -score_white
 # ---------- QUIESCENCE ----------
-def quiescence(board: chess.Board, alpha: int, beta: int) -> int:
-    """Quiescence search: conservative capture pruning using see_safe()."""
+def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int:
+    """2-ply tactical quiescence search with SEE pruning and quiet tactical extensions."""
     global node_count
     if timeout():
         raise TimeoutError
     node_count += 1
 
+    # --- Stand-pat evaluation ---
     stand = evaluate(board)
     if stand >= beta:
         return beta
     if alpha < stand:
         alpha = stand
 
-    # Delta pruning: stand-pat too low
+    # --- Delta pruning ---
     if stand + FUTILITY_MARGIN < alpha and not board.is_check():
         return alpha
 
-    # Generate tactical moves: captures, promotions (to queen), and checks.
     moves: List[chess.Move] = []
+
+    # --- Generate tactical moves ---
     for m in board.legal_moves:
         if board.is_capture(m):
-            # Prefer to evaluate capture safety with simulator SEE; prune only
-            # clearly losing captures.
             try:
                 s = see_safe(board, m)
             except Exception:
-                # fallback to faster SEE if simulation fails
-                try:
-                    s = see(board, m)
-                except Exception:
-                    s = 0
-            # Only skip captures that are clearly losing by margin.
-            if s < -50:
+                s = 0
+            if s < -70:
                 continue
             moves.append(m)
+
         elif m.promotion == chess.QUEEN:
             moves.append(m)
-        else:
+
+        elif board.gives_check(m):
+            moves.append(m)
+
+        # quiet tactical extensions (forks / discoveries)
+        elif depth < 2:  # only do this in first layer, prevents explosion
             try:
-                if board.gives_check(m):
+                board.push(m)
+                delta_eval = evaluate(board) - stand
+                board.pop()
+                if delta_eval > 80:
                     moves.append(m)
             except Exception:
-                pass
+                continue
 
     if not moves:
         return stand
 
+    # --- Order moves (MVV-LVA + SEE) ---
     if len(moves) > 1:
         moves = order_moves(board, moves, None, 0)
 
+    # --- Explore moves ---
     for m in moves:
         board.push(m)
         try:
-            val = -quiescence(board, -beta, -alpha)
+            # two-ply tactical lookahead
+            if depth < 1:
+                val = -quiescence(board, -beta, -alpha, depth + 1)
+            else:
+                # after first ply, only extend one more tactical layer
+                val = -evaluate(board)
         finally:
             board.pop()
+
         if val >= beta:
             return beta
         if val > alpha:
             alpha = val
+
     return alpha
    
 # ---------- TRANSPO TABLE ----------
