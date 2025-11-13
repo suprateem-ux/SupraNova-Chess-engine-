@@ -712,24 +712,30 @@ def is_semi_open_file(board, file, color):
 def evaluate(board: chess.Board) -> int:
     score_white = 0
 
+    # Scale positional terms to keep material dominant
+    POS_SCALE = 0.45  
+
     # --- Material and PST ---
     for pt, val in PIECE_VALUE.items():
         w_count = len(board.pieces(pt, chess.WHITE))
         b_count = len(board.pieces(pt, chess.BLACK))
         score_white += val * (w_count - b_count)
+
+        # --- White PST bonuses ---
         for s in board.pieces(pt, chess.WHITE):
             pst_bonus = interpolate_pst(board, pt, s, chess.WHITE)
-            # Bishop pair PST adjustment: bonus for central squares if 2 bishops
             if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
                 if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
                     pst_bonus += 10
-            score_white += pst_bonus
+            score_white += pst_bonus * POS_SCALE
+
+        # --- Black PST penalties ---
         for s in board.pieces(pt, chess.BLACK):
             pst_bonus = interpolate_pst(board, pt, s, chess.BLACK)
             if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
                 if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
                     pst_bonus += 10
-            score_white -= pst_bonus
+            score_white -= pst_bonus * POS_SCALE
 
     # --- Advanced Mobility (piece-specific) ---
     mobility_white = 0
