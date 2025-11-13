@@ -868,7 +868,7 @@ def evaluate(board: chess.Board) -> int:
 
   #   --- Check penalty ---
         if board.is_check():
-        score_white += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
+            score_white += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
 
     # --- Return normalized score (always integer) ---
     return int(score_white if board.turn == chess.WHITE else -score_white)
