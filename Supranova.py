@@ -879,6 +879,10 @@ def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int
     if timeout():
         raise TimeoutError
     node_count += 1
+    if board.is_repetition(3) or board.can_claim_threefold_repetition():
+        return -30
+    if board.can_claim_fifty_moves() or board.is_fivefold_repetition():
+        return -30
 
     # --- Stand-pat evaluation ---
     stand = evaluate(board)
@@ -1001,7 +1005,13 @@ def alpha_beta(
             beta = min(beta, ttent.score)
         if alpha >= beta:
             return ttent.score
+    if board.is_repetition(3):
+        return -30   # or -20, never 0. Slight penalty only!
 
+    # 50-move rule claim → also avoid
+    if board.can_claim_fifty_moves():
+        return -30
+    # ---------------------
     if board.is_checkmate():
         return -MATE_VALUE + ply
     if board.is_stalemate():
