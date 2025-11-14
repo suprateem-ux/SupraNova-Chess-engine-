@@ -1229,20 +1229,30 @@ def mate_search_root(board: chess.Board, max_mate_ply: int, time_limit_s: float)
     return None
 
 # ---------- ROOT SEARCH & ITERATIVE DEEPENING (full search) ----------
+
 def extract_pv(board: chess.Board, depth_limit: int) -> List[chess.Move]:
-    pv: List[chess.Move] = []
+    pv = []
+    seen = set()   # avoid infinite cycles
     b = board.copy()
+
     for _ in range(depth_limit):
-        e = TT.get(get_key(b))
+        key = get_key(b)
+        e = TT.get(key)
+
         if not e or not e.best:
             break
         mv = e.best
-        if mv not in b.legal_moves:
+
+        # Prevent illegal or looping PV
+        if mv not in b.legal_moves or (b.turn, mv) in seen:
             break
+
+        seen.add((b.turn, mv))
         pv.append(mv)
         b.push(mv)
-    return pv
 
+    return pv
+  
 def root_search(
     board: chess.Board,
     max_depth: int,
@@ -1251,67 +1261,104 @@ def root_search(
     multipv: int = 1,
 ):
     global node_count, start_time, time_limit, TT_AGE, NODE_LIMIT
+
+    # Init
     node_count = 0
     TT_AGE = (TT_AGE + 1) % 256
     stop_event.clear()
+
     start_time = time.time()
-    time_limit = movetime if movetime else DEFAULT_MOVE_TIME
+    time_limit = movetime or DEFAULT_MOVE_TIME
     NODE_LIMIT = nodes_limit
-    best_move: Optional[chess.Move] = None
+
+    best_move = None
     best_score = -INFTY
     multipv = max(1, min(MULTIPV_MAX, multipv))
-    results: List[Tuple[int, List[chess.Move]]] = []
+    final_results = []
 
     try:
         for depth in range(1, max_depth + 1):
+
             if timeout():
                 break
-            alpha = -MATE_VALUE
-            beta = MATE_VALUE
-            if best_move and depth >= 2:
+
+            # Aspiration setup
+            if depth == 1 or best_move is None:
+                alpha = -MATE_VALUE
+                beta = MATE_VALUE
+            else:
                 alpha = best_score - ASPIRATION
-                beta = best_score + ASPIRATION
+                beta  = best_score + ASPIRATION
 
-            tt_entry = TT.get(get_key(board))
-            ttbest = tt_entry.best if tt_entry else None
+            original_alpha = alpha
+            original_beta = beta
+            search_finished = False
 
-            moves = list(board.legal_moves)
-            moves = order_moves(board, moves, ttbest, 0)
-            root_scores: List[Tuple[int, chess.Move]] = []
+            # === Aspiration loop ===
+            while not search_finished:
 
-            for mv in moves:
-                if timeout():
-                    break
-                board.push(mv)
-                try:
-                    sc = -alpha_beta(board, depth - 1, -beta, -alpha, 1, True, None)
-                except TimeoutError:
+                tt_entry = TT.get(get_key(board))
+                ttbest = tt_entry.best if tt_entry else None
+
+                moves = list(board.legal_moves)
+                moves = order_moves(board, moves, ttbest, ply=0)
+
+                root_scores = []
+
+                for mv in moves:
+                    if timeout():
+                        raise TimeoutError
+
+                    board.push(mv)
+                    score = -alpha_beta(board, depth - 1, -beta, -alpha, 1, True, None)
                     board.pop()
-                    raise
-                finally:
-                    if board.move_stack and board.move_stack[-1] == mv:
-                        board.pop()
-                root_scores.append((sc, mv))
-                if sc > alpha:
-                    alpha = sc
-                if sc > best_score:
-                    best_score = sc
-                    best_move = mv
 
-            root_scores.sort(reverse=True, key=lambda x: x[0])
-            results = []
+                    root_scores.append((score, mv))
+
+                    # Update best move (principal)
+                    if score > best_score:
+                        best_score = score
+                        best_move = mv
+
+                    # Update aspiration bounds
+                    if score > alpha:
+                        alpha = score
+
+                # Sort principal scores
+                root_scores.sort(key=lambda x: x[0], reverse=True)
+
+                # Aspiration logic
+                if best_score <= original_alpha:
+                    # fail-low
+                    alpha = -MATE_VALUE
+                    beta = original_beta
+                    original_alpha -= ASPIRATION  # widen
+                elif best_score >= original_beta:
+                    # fail-high
+                    beta = MATE_VALUE
+                    alpha = original_alpha
+                    original_beta += ASPIRATION   # widen
+                else:
+                    # aspiration window satisfied
+                    search_finished = True
+
+            # Generate MultiPV
+            final_results = []
             for i in range(min(multipv, len(root_scores))):
-                sc, mv = root_scores[i]
-                b = board.copy()
-                b.push(mv)
-                pv = [mv] + extract_pv(b, depth - 1)
-                results.append((sc, pv))
+                score, mv = root_scores[i]
+                temp = board.copy()
+                temp.push(mv)
+                pv = [mv] + extract_pv(temp, depth - 1)
+                final_results.append((score, pv))
+
+            # Stop early on mate or timeout
             if best_score >= MATE_VALUE - 1000 or timeout():
                 break
+
     except TimeoutError:
         pass
-    return best_move, results
 
+    return best_move, final_results
 # ---------- UCI LOOP ----------
 def uci_loop() -> None:
     board = chess.Board()
