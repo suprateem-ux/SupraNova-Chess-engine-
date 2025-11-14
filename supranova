@@ -882,10 +882,22 @@ def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int
     if timeout():
         raise TimeoutError
     node_count += 1
-    if board.is_repetition(3) or board.can_claim_threefold_repetition():
-        return -30
-    if board.can_claim_fifty_moves() or board.is_fivefold_repetition():
-        return -30
+    LOSS_THRESHOLD = 350
+    REPETITION_PENALTY = 30
+
+    if board.is_repetition(3) or board.can_claim_threefold_repetition() or board.is_fivefold_repetition():
+        stand = evaluate(board)
+        if stand <= -LOSS_THRESHOLD:
+            return 0
+        else:
+            return -REPETITION_PENALTY
+
+    if board.can_claim_fifty_moves():
+        stand = evaluate(board)
+        if stand <= -LOSS_THRESHOLD:
+            return 0
+        else:
+            return -REPETITION_PENALTY
 
     # --- Stand-pat evaluation ---
     stand = evaluate(board)
@@ -1009,10 +1021,30 @@ def alpha_beta(
         if alpha >= beta:
             return ttent.score
         # after TT probe...
-    if board.is_repetition(3) or board.can_claim_threefold_repetition():
-        return -30
+        # -----------------------------------------
+    # Repetition / 50-move handling (policy: draw if losing, avoid if winning)
+    # -----------------------------------------
+    # Note: evaluate(board) in your code returns score from the side-to-move POV.
+    LOSS_THRESHOLD = 350      # centipawns: if side-to-move <= -LOSS_THRESHOLD -> accept draw
+    REPETITION_PENALTY = 30      # centipawns: small penalty to avoid repetition when winning
+
+    if board.is_repetition(3) or board.can_claim_threefold_repetition() or board.is_fivefold_repetition():
+        stand = evaluate(board)  # from side-to-move POV
+        if stand <= -LOSS_THRESHOLD:
+            # we're sufficiently losing — accept the claimable draw (return 0)
+            return 0
+        else:
+            # avoid repetition when winning or about equal
+            return -REPETITION_PENALTY
+
     if board.can_claim_fifty_moves() or board.is_fivefold_repetition():
-        return -30
+        # same policy for 50-move / forced multi-fold repetition
+        stand = evaluate(board)
+        if stand <= -LOSS_THRESHOLD:
+            return 0
+        else:
+            return -REPETITION_PENALTY
+    # -----------------------------------------
     if board.is_checkmate():
         return -MATE_VALUE + ply
     if board.is_stalemate():
