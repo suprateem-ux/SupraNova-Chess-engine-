@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# the code can do much more ig...
 """
 Bitboard-friendly chess engine (single-file).
 
@@ -1341,7 +1341,7 @@ def uci_loop() -> None:
             break
         line = line.strip()
         if line == "uci":
-            print("id name Supranova")
+            print("id name Supranova-v1.0.27")
             print("id author Supra")
             print("option name Hash type spin default 32 min 1 max 4096")
             print("option name Threads type spin default 1 min 1 max 8")
