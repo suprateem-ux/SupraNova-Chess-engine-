@@ -1001,8 +1001,8 @@ def alpha_beta(
     alpha: int,
     beta: int,
     ply: int,
-    allow_null: bool,
-    pv_move: Optional[chess.Move],
+    is_pv: bool = False,
+    excluded_move: Optional[chess.Move] = None,
 ) -> int:
     global node_count, TT_AGE
     if timeout():
@@ -1054,7 +1054,7 @@ def alpha_beta(
 
     pvmove = ttent.best if ttent else None
 
-    if allow_null and depth >= 3 and not board.is_check() and not board.can_claim_draw():
+    if (not is_pv) and depth >= 3 and not board.is_check() and not board.can_claim_draw():
         board.push(chess.Move.null())
         try:
             val = -alpha_beta(board, depth - 1 - NULL_REDUCTION, -beta, -beta + 1, ply + 1, False, None)
@@ -1067,7 +1067,7 @@ def alpha_beta(
     if not moves:
         return 0
 
-    moves = order_moves(board, moves, pvmove or pv_move, ply)
+    moves = order_moves(board, moves, pvmove, ply)
     best_score = -INFTY
     best_move: Optional[chess.Move] = None
     first = True
