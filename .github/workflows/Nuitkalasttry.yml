@@ -46,11 +46,11 @@ jobs:
 
       - name: Build Linux executable
         if: matrix.os == 'ubuntu-latest'
-        run: python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-ubuntu-latest
+        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --output-filename=Supranova-ubuntu-latest
 
       - name: Build macOS executable
         if: matrix.os == 'macos-latest'
-        run: python -m nuitka supranova --onefile --lto=yes --jobs=4 --output-filename=Supranova-macos-latest
+        run: python -m nuitka Supranova.py --onefile --lto=yes --jobs=4 --output-filename=Supranova-macos-latest
 
       - name: Upload Executable as Artifact (Windows)
         if: matrix.os == 'windows-latest'
