@@ -1,4 +1,4 @@
-# the code can do much more ig...
+# the code can do much more ig..
 """
 Bitboard-friendly chess engine (single-file).
 
