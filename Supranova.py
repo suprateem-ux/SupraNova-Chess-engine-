@@ -1295,6 +1295,7 @@ def root_search(
             search_finished = False
 
             # === Aspiration loop ===
+            root_scores = []
             while not search_finished:
 
                 tt_entry = TT.get(get_key(board))
