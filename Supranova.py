@@ -1337,7 +1337,7 @@ def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
     if multipv == 1:
         return best_move, [best_move]
     else:
-        return best_move, multipv_list
+        return best_move, [best_move]
 # ---------- UCI LOOP ----------
 def uci_loop() -> None:
     board = chess.Board()
