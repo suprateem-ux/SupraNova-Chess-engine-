@@ -1,4 +1,4 @@
-# the code can do much more ig..
+#!/usr/bin/env python3 
 """
 Bitboard-friendly chess engine (single-file).
 
