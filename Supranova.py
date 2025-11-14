@@ -621,7 +621,7 @@ def pawn_structure_hash(board):
                 if 0 <= nf < 8 and 0 <= nr < 8:
                     sq = chess.square(nf, nr)
                     if sq in board.pieces(chess.PAWN, color):
-                        return 10
+                        return 3
         else:
             for df in [-1, 1]:
                 nf = file + df
@@ -629,7 +629,7 @@ def pawn_structure_hash(board):
                 if 0 <= nf < 8 and 0 <= nr < 8:
                     sq = chess.square(nf, nr)
                     if sq in board.pieces(chess.PAWN, color):
-                        return 10
+                        return 3
         return 0
 
     def is_blockaded(board, square, color):
@@ -720,7 +720,7 @@ def evaluate(board: chess.Board) -> int:
     score_white = 0
 
     # --- Scaling constants ---
-    POS_SCALE = 0.45       # limits positional impact
+    POS_SCALE = 0.4    # limits positional impact
     MOBILITY_SCALE = 0.25  # mobility shouldn't outweigh material
     KING_SAFETY_SCALE = 0.8
     SPACE_SCALE = 0.6
