@@ -1331,7 +1331,13 @@ def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
         if best_score >= MATE_VALUE - 1000:
             break
 
-    return best_move
+       # ---- END OF ITERATIVE DEEPENING LOOP ----
+
+    # Always return tuple: (best move, multipv list)
+    if multipv == 1:
+        return best_move, [best_move]
+    else:
+        return best_move, multipv_list
 # ---------- UCI LOOP ----------
 def uci_loop() -> None:
     board = chess.Board()
