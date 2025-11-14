@@ -649,27 +649,27 @@ def pawn_structure_hash(board):
     for sq in board.pieces(chess.PAWN, chess.WHITE):
         rank = chess.square_rank(sq)
         if is_passed_pawn(board, sq, chess.WHITE):
-            score_white += 20 * (rank - 1)
+            score_white += 6 * (rank - 1)
         if is_isolated_pawn(board, sq, chess.WHITE):
-            score_white -= 16
+            score_white -= 4
         if is_doubled_pawn(board, sq, chess.WHITE):
-            score_white -= 13
+            score_white -= 5
         score_white += pawn_chain_bonus(board, sq, chess.WHITE)
         if is_blockaded(board, sq, chess.WHITE):
-            score_white -= 15
+            score_white -= 6
 
     # Black pawns
     for sq in board.pieces(chess.PAWN, chess.BLACK):
         rank = 7 - chess.square_rank(sq)
         if is_passed_pawn(board, sq, chess.BLACK):
-            score_white -= 20 * (rank - 1)
+            score_white -= 8 * (rank - 1)
         if is_isolated_pawn(board, sq, chess.BLACK):
-            score_white += 16
+            score_white += 6
         if is_doubled_pawn(board, sq, chess.BLACK):
-            score_white += 13
+            score_white += 6
         score_white -= pawn_chain_bonus(board, sq, chess.BLACK)
         if is_blockaded(board, sq, chess.BLACK):
-            score_white += 15
+            score_white += 7
 
     PAWN_HASH[key] = score_white
     return score_white
