@@ -880,7 +880,7 @@ def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int
     """2-ply tactical quiescence search with SEE pruning and quiet tactical extensions."""
     global node_count
     if timeout():
-        raise TimeoutError
+        return evaluate(board)
     node_count += 1
     LOSS_THRESHOLD = 350
     REPETITION_PENALTY = 30
@@ -1006,7 +1006,7 @@ def alpha_beta(
 ) -> int:
     global node_count, TT_AGE
     if timeout():
-        raise TimeoutError
+        raise evaluate(board)
     node_count += 1
 
     key = get_key(board)
@@ -1266,22 +1266,21 @@ def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
 
     multipv = max(1, min(MULTIPV_MAX, multipv))
 
-    multipv_results = []   # list of (move, score, pv_line)
+    multipv_results = []   # canonical: list of (score, pv_line)
 
     # ---- ITERATIVE DEEPENING ----
     for depth in range(1, max_depth + 1):
-
         if timeout():
             break
 
-        scored_moves = []  # temporary for this depth
+        scored_moves = []
 
         # Order root moves
         tt_entry = TT.get(get_key(board))
         tt_best = tt_entry.best if tt_entry else None
         moves = order_moves(board, list(board.legal_moves), tt_best, ply=0)
 
-        # Search each root move
+        # Score every move
         for mv in moves:
             if timeout():
                 break
@@ -1293,28 +1292,27 @@ def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
 
             scored_moves.append((mv, score))
 
-        # Sort moves by descending score
         scored_moves.sort(key=lambda x: x[1], reverse=True)
 
-        # Take the top multipv moves
+        # Only top multipv moves
         top_moves = scored_moves[:multipv]
 
-        # Add PV lines for each move
         multipv_results = []
         for mv, score in top_moves:
             board.push(mv)
             pv_line = [mv] + extract_pv(board, depth_limit=depth)
             board.pop()
 
-            multipv_results.append((mv, score, pv_line))
+            # ✨ CORRECTED FORMAT
+            multipv_results.append((score, pv_line))
 
-        # Stop early if mate found
-        if multipv_results and multipv_results[0][1] >= MATE_VALUE - 1000:
+        # Mate found → stop early
+        if multipv_results and multipv_results[0][0] >= MATE_VALUE - 1000:
             break
 
-    # Fallback best move
+    # Determine best move safely
     if multipv_results:
-        best_move = multipv_results[0][0]
+        best_move = multipv_results[0][1][0]  # the first PV move
     else:
         try:
             best_move = next(iter(board.legal_moves))
@@ -1494,7 +1492,9 @@ def uci_loop() -> None:
             multipv_list = search_result.get('multipv_list')
             best = search_result.get('best')
             if multipv_list:
-                for idx, (sc, pv) in enumerate(multipv_list, start=1):
+                for idx, entry in enumerate(multipv_list, start=1):
+                    sc = entry[0]      # <-- this is becoming a Move
+                    pv = entry[1]
                     if abs(sc) > MATE_VALUE // 2:
                         mate = (MATE_VALUE - abs(sc)) // 100
                         score_str = f"mate {mate if sc > 0 else -mate}"
