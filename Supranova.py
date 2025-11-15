@@ -1256,7 +1256,6 @@ def extract_pv(board: chess.Board, depth_limit: int) -> List[chess.Move]:
 def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
     global node_count, start_time, time_limit, NODE_LIMIT, TT_AGE
 
-    # Reset counters
     node_count = 0
     TT_AGE = (TT_AGE + 1) % 256
     stop_event.clear()
@@ -1267,77 +1266,62 @@ def root_search(board, max_depth, movetime=None, nodes_limit=None, multipv=1):
 
     multipv = max(1, min(MULTIPV_MAX, multipv))
 
-    best_move = None
-    best_score = -INFTY
+    multipv_results = []   # list of (move, score, pv_line)
 
+    # ---- ITERATIVE DEEPENING ----
     for depth in range(1, max_depth + 1):
 
         if timeout():
             break
 
-        # Aspiration Window
-        if depth == 1 or best_move is None:
-            alpha = -MATE_VALUE
-            beta = MATE_VALUE
-        else:
-            alpha = best_score - ASPIRATION
-            beta  = best_score + ASPIRATION
+        scored_moves = []  # temporary for this depth
 
-        while True:
-            curr_best_score = -INFTY
-            curr_best_move = None
+        # Order root moves
+        tt_entry = TT.get(get_key(board))
+        tt_best = tt_entry.best if tt_entry else None
+        moves = order_moves(board, list(board.legal_moves), tt_best, ply=0)
 
-            # Order moves using TT move
-            tt_entry = TT.get(get_key(board))
-            tt_best = tt_entry.best if tt_entry else None
+        # Search each root move
+        for mv in moves:
+            if timeout():
+                break
 
-            moves = order_moves(board, list(board.legal_moves), tt_best, ply=0)
+            board.push(mv)
+            score = -alpha_beta(board, depth - 1, -MATE_VALUE, MATE_VALUE,
+                                ply=1, is_pv=True, excluded_move=None)
+            board.pop()
 
-            for mv in moves:
+            scored_moves.append((mv, score))
 
-                if timeout():
-                    break
+        # Sort moves by descending score
+        scored_moves.sort(key=lambda x: x[1], reverse=True)
 
-                board.push(mv)
-                score = -alpha_beta(board, depth - 1, -beta, -alpha, ply=1, is_pv=True, excluded_move=None)
-                board.pop()
+        # Take the top multipv moves
+        top_moves = scored_moves[:multipv]
 
-                if score > curr_best_score:
-                    curr_best_score = score
-                    curr_best_move = mv
+        # Add PV lines for each move
+        multipv_results = []
+        for mv, score in top_moves:
+            board.push(mv)
+            pv_line = [mv] + extract_pv(board, depth_limit=depth)
+            board.pop()
 
-                # PV best move is used to adjust alpha
-                if score > alpha:
-                    alpha = score
+            multipv_results.append((mv, score, pv_line))
 
-            # Aspiration checks
-            if curr_best_score <= (best_score - ASPIRATION):
-                # Fail low → widen lower bound
-                alpha = -MATE_VALUE
-                continue
-
-            if curr_best_score >= (best_score + ASPIRATION):
-                # Fail high → widen upper bound
-                beta = MATE_VALUE
-                continue
-
-            # Aspiration satisfied
+        # Stop early if mate found
+        if multipv_results and multipv_results[0][1] >= MATE_VALUE - 1000:
             break
 
-        best_score = curr_best_score
-        best_move = curr_best_move
-
-        # Found a mate → no need to continue
-        if best_score >= MATE_VALUE - 1000:
-            break
-
-       # ---- END OF ITERATIVE DEEPENING LOOP ----
-
-    # Always return tuple: (best move, multipv list)
-    if multipv == 1:
-        return best_move, [best_move]
+    # Fallback best move
+    if multipv_results:
+        best_move = multipv_results[0][0]
     else:
-        return best_move, [best_move]
+        try:
+            best_move = next(iter(board.legal_moves))
+        except StopIteration:
+            best_move = None
+
+    return best_move, multipv_results
 # ---------- UCI LOOP ----------
 def uci_loop() -> None:
     board = chess.Board()
