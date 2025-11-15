@@ -1006,7 +1006,7 @@ def alpha_beta(
 ) -> int:
     global node_count, TT_AGE
     if timeout():
-        raise evaluate(board)
+        return evaluate(board)
     node_count += 1
 
     key = get_key(board)
