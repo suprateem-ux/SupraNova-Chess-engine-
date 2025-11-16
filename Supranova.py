@@ -759,24 +759,28 @@ def is_outpost(board: chess.Board, sq: int, color: int) -> bool:
                         return False
         return True
 
-
 def is_open_file(board: chess.Board, file: int) -> bool:
     """Open file: no pawns of either color on that file."""
     for r in range(8):
         sq = chess.square(file, r)
-        if sq in board.pieces(chess.PAWN, chess.WHITE) or sq in board.pieces(chess.PAWN, chess.BLACK):
+        if (
+            sq in board.pieces(chess.PAWN, chess.WHITE)
+            or sq in board.pieces(chess.PAWN, chess.BLACK)
+        ):
             return False
     return True
 
 
-def is_semi_open_file(board: chess.Board, file: int, color: int) -> bool:
-    """Semi-open: no friendly pawns on file (enemy pawns allowed)."""
+def is_semi_open_file(board: chess.Board, file: int, color: chess.Color) -> bool:
+    """
+    Semi-open file:
+    No pawns of *this color* on the file.
+    """
     for r in range(8):
         sq = chess.square(file, r)
         if sq in board.pieces(chess.PAWN, color):
             return False
     return True
-
 
 def evaluate(board: chess.Board) -> int:
     """
@@ -927,7 +931,7 @@ def evaluate(board: chess.Board) -> int:
         score += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
 
     # final integer centipawn result (White perspective)
-    return int(score_white if board.turn == chess.WHITE else -score_white)
+    return int(score if board.turn == chess.WHITE else -score)
 # ---------- QUIESCENCE ----------
 def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int:
     """2-ply tactical quiescence search with SEE pruning and quiet tactical extensions."""
