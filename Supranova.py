@@ -511,57 +511,82 @@ def see(board: chess.Board, move: chess.Move) -> int:
 
 # ---------- MOVE ORDERING ----------
 def mvv_lva_score(board: chess.Board, move: chess.Move) -> int:
-    """Strongest practical MVV-LVA for move ordering."""
-    # Promotions that are captures: highest priority
-    if move.promotion:
-        promo_value = PIECE_VALUE.get(move.promotion, 0)
-        base = 100_000 + promo_value * 100
-        if board.is_capture(move):
-            victim = board.piece_at(move.to_square)
-            victim_value = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
-            base += victim_value * 10
-        return base
-    # Normal captures (MVV-LVA)
-    if board.is_capture(move):
-        victim = board.piece_at(move.to_square)
-        attacker = board.piece_at(move.from_square)
-        victim_value = PIECE_VALUE.get(victim.piece_type, 0) if victim else 0
-        attacker_value = PIECE_VALUE.get(attacker.piece_type, 0) if attacker else 1
-        # 10x scale is common in strong open source engines
-        return victim_value * 10 - attacker_value
-    return 0
+    """
+    Modern strongest MVV-LVA:
+    - Scaled correctly (small, fast, predictable)
+    - Only used for captures
+    """
+    if not board.is_capture(move):
+        return 0
 
-def move_score(
-    board: chess.Board,
-    move: chess.Move,
-    pv_move: Optional[chess.Move],
-    ply: int,
-) -> int:
-    score = 0
+    victim = board.piece_at(move.to_square)
+    attacker = board.piece_at(move.from_square)
+    if not victim or not attacker:
+        return 0
+
+    # Standard +10 scale for stability
+    return PIECE_VALUE[victim.piece_type] * 10 - PIECE_VALUE[attacker.piece_type]
+
+
+def move_score(board: chess.Board, move: chess.Move,
+               pv_move: Optional[chess.Move], ply: int) -> int:
+    """
+    Strongest move ordering hierarchy:
+    1. PV move (absolute top)
+    2. Captures (MVV-LVA + SEE penalty for losers)
+    3. Promotions
+    4. Killer moves (slot 1 > slot 2)
+    5. History heuristic
+    """
+    # ----- PV move (instantly top) -----
     if pv_move and move == pv_move:
-        score += 1_000_000
-    score += mvv_lva_score(board, move)
-    if move in KILLERS.get(ply, []):
-        score += 80_000
-    score += HISTORY.get((move.from_square, move.to_square), 0)
+        return 100_000_000
+
+    score = 0
+
+    # ----- Captures -----
     if board.is_capture(move):
-        s = see(board, move)
-        score += max(0, s)
-    try:
-        if board.gives_check(move):
-            score += 50_000
-    except Exception:
-        pass
+        score += 20_000 + mvv_lva_score(board, move)
+
+        # SEE: ONLY push *losing* captures down (top engine technique)
+        if see(board, move) < 0:
+            score -= 10_000
+
+    # ----- Promotions -----
+    if move.promotion:
+        score += 40_000
+
+    # ----- Killer moves -----
+    k1, k2 = KILLERS.get(ply, (None, None))
+    if move == k1:
+        score += 10_000
+    elif move == k2:
+        score += 5_000
+
+    # ----- History heuristic -----
+    score += HISTORY.get((move.from_square, move.to_square), 0)
+
     return score
-def order_moves(
-    board: chess.Board, moves: List[chess.Move], pv_move: Optional[chess.Move], ply: int
-) -> List[chess.Move]:
-    scored: List[Tuple[int, chess.Move]] = []
-    for m in moves:
-        sc = move_score(board, m, pv_move, ply)
+
+
+def order_moves(board: chess.Board, moves: List[chess.Move],
+                pv_move: Optional[chess.Move], ply: int) -> List[chess.Move]:
+    """
+    Strongest ordering:
+    - Full hierarchical scoring
+    - Random tie-breaking (optional)
+    """
+    scored = []
+
+    for move in moves:
+        base = move_score(board, move, pv_move, ply)
+
         if RANDOM_TIE:
-            sc = (sc << 8) + random.randint(0, 255)
-        scored.append((sc, m))
+            # tiny noise injected in lowest bits
+            base = (base << 8) + random.randint(0, 255)
+
+        scored.append((base, move))
+
     scored.sort(reverse=True, key=lambda x: x[0])
     return [m for (_, m) in scored]
 
