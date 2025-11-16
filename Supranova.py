@@ -974,25 +974,72 @@ TT_UPPER = 2
 TT_SIZE_LIMIT = 2_000_000
 
 def tt_lookup(key: int, depth: int, alpha: int, beta: int) -> Optional[int]:
+    """
+    Backwards-compatible probe: returns a score if the TT entry provides an immediate usable cutoff,
+    otherwise returns None. Does not mutate globals.
+    """
     e = TT.get(key)
     if not e:
         return None
-    if e.depth >= depth:
-        if e.flag == TT_EXACT:
-            return e.score
-        if e.flag == TT_LOWER and e.score > alpha:
-            alpha = e.score
-        if e.flag == TT_UPPER and e.score < beta:
-            beta = e.score
-        if alpha >= beta:
-            return e.score
+    # entry too shallow to be used for this probe
+    if e.depth < depth:
+        return None
+
+    if e.flag == TT_EXACT:
+        return e.score
+    if e.flag == TT_LOWER and e.score >= beta:
+        # lower bound >= beta -> cutoff
+        return e.score
+    if e.flag == TT_UPPER and e.score <= alpha:
+        # upper bound <= alpha -> cutoff
+        return e.score
     return None
 
+
+def tt_lookup_entry(key: int) -> Optional[TTEntry]:
+    """Return the raw TTEntry (or None). Caller can inspect depth/flag/best as needed."""
+    return TT.get(key)
+
+
 def tt_store(key: int, depth: int, score: int, flag: int, best: Optional[chess.Move]) -> None:
-    global TT_AGE
+    """
+    Replacement policy:
+      - Never overwrite a deeper entry from the same TT_AGE with a shallower one.
+      - Allow replacing older entries (different age) with similar-depth entries.
+      - Insert if missing.
+      - Simple eviction when TT grows over TT_SIZE_LIMIT: evict some old-age entries first.
+    """
+    global TT_AGE, TT
+
     e = TT.get(key)
-    if e is None or depth > e.depth or e.age != TT_AGE:
-        TT[key] = TTEntry(key, depth, score, flag, best, TT_AGE)
+    if e is None:
+        TT[key] = TTEntry(key=key, depth=depth, score=score, flag=flag, best=best, age=TT_AGE)
+        # enforce size limit (simple policy)
+        if len(TT) > TT_SIZE_LIMIT:
+            # prefer removing old entries (age != TT_AGE)
+            to_remove = [k for k, ent in TT.items() if ent.age != TT_AGE]
+            if not to_remove:
+                # fallback: remove a small fraction (arbitrary)
+                it = iter(TT)
+                to_remove = [next(it)]
+            for k in to_remove[:max(1, len(TT)//50)]:
+                TT.pop(k, None)
+        return
+
+    # don't overwrite a deeper entry from the same generation
+    if depth < e.depth and e.age == TT_AGE:
+        return
+
+    # allow replacement if:
+    #  - depth >= e.depth (new is as deep or deeper)
+    #  - OR existing entry is old (age differs) and new depth is not much smaller
+    if depth < e.depth and e.age != TT_AGE:
+        if depth < e.depth - 1:
+            # new entry too shallow compared to old (even if old is old-age)
+            return
+
+    # replace
+    TT[key] = TTEntry(key=key, depth=depth, score=score, flag=flag, best=best, age=TT_AGE)
 
 # ---------- ALPHA-BETA (full search) ----------
 def alpha_beta(
@@ -1005,40 +1052,45 @@ def alpha_beta(
     excluded_move: Optional[chess.Move] = None,
 ) -> int:
     global node_count, TT_AGE
+
+    # keep timeout behavior consistent with your existing code
     if timeout():
         return evaluate(board)
     node_count += 1
 
     key = get_key(board)
     ttent = TT.get(key)
+
+    # Save original bounds for correct flag computation later
+    orig_alpha = alpha
+    orig_beta = beta
+
+    # === TT probe: immediate cutoffs and ordering info ===
     if ttent and ttent.depth >= depth:
         if ttent.flag == TT_EXACT:
             return ttent.score
         if ttent.flag == TT_LOWER:
+            if ttent.score >= beta:
+                return ttent.score
             alpha = max(alpha, ttent.score)
         elif ttent.flag == TT_UPPER:
+            if ttent.score <= alpha:
+                return ttent.score
             beta = min(beta, ttent.score)
-        if alpha >= beta:
-            return ttent.score
-        # after TT probe...
-        # -----------------------------------------
-    # Repetition / 50-move handling (policy: draw if losing, avoid if winning)
+        # keep ttent for possible PV move ordering (only if depth is sufficient)
     # -----------------------------------------
-    # Note: evaluate(board) in your code returns score from the side-to-move POV.
+    # Repetition / 50-move handling (policy: draw if losing, avoid if winning)
     LOSS_THRESHOLD = 350      # centipawns: if side-to-move <= -LOSS_THRESHOLD -> accept draw
     REPETITION_PENALTY = 30      # centipawns: small penalty to avoid repetition when winning
 
     if board.is_repetition(3) or board.can_claim_threefold_repetition() or board.is_fivefold_repetition():
         stand = evaluate(board)  # from side-to-move POV
         if stand <= -LOSS_THRESHOLD:
-            # we're sufficiently losing — accept the claimable draw (return 0)
             return 0
         else:
-            # avoid repetition when winning or about equal
             return -REPETITION_PENALTY
 
     if board.can_claim_fifty_moves() or board.is_fivefold_repetition():
-        # same policy for 50-move / forced multi-fold repetition
         stand = evaluate(board)
         if stand <= -LOSS_THRESHOLD:
             return 0
@@ -1052,8 +1104,10 @@ def alpha_beta(
     if depth <= 0:
         return quiescence(board, alpha, beta)
 
-    pvmove = ttent.best if ttent else None
+    # PV move: use only if the stored entry is deep enough (safer)
+    pvmove = ttent.best if (ttent and ttent.best and ttent.depth >= depth) else None
 
+    # Null-move reduction test (same as your code)
     if (not is_pv) and depth >= 3 and not board.is_check() and not board.can_claim_draw():
         board.push(chess.Move.null())
         try:
@@ -1073,14 +1127,11 @@ def alpha_beta(
     first = True
 
     for i, mv in enumerate(moves):
-                # --- restricted futility pruning: only at depth == 1, and only when not in check
-       # if depth == 1 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
-         #   if not board.is_check():
-         #       est = evaluate(board)
-                # stronger margin required to prune at all (avoid pruning defensive moves)
-            #    if est + (FUTILITY_MARGIN * 2) <= alpha:
-                #    continue
+        # skip excluded move if you use that elsewhere
+        if excluded_move and mv == excluded_move:
+            continue
 
+        # LMR calculation (unchanged)
         reduction = 0
         if not first and depth >= 3 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
             reduction = int(LMR_BASE + math.log(max(depth, 2)) / LMR_DIV + math.log(i + 1) / LMR_DIV)
@@ -1095,32 +1146,42 @@ def alpha_beta(
                 if try_depth < 0:
                     try_depth = 0
                 val = -alpha_beta(board, try_depth, -alpha - 1, -alpha, ply + 1, True, None)
+                # if failed high on null-window, do full re-search
                 if alpha < val < beta:
                     val = -alpha_beta(board, depth - 1, -beta, -alpha, ply + 1, True, None)
         finally:
             board.pop()
 
         first = False
+
         if val > best_score:
             best_score = val
             best_move = mv
         if val > alpha:
             alpha = val
+
         if alpha >= beta:
+            # record killer/history (unchanged semantics)
             if not board.is_capture(mv):
                 km = KILLERS.setdefault(ply, [None, None])
                 if km[0] != mv:
                     km[1] = km[0]
                     km[0] = mv
             HISTORY[(mv.from_square, mv.to_square)] = HISTORY.get((mv.from_square, mv.to_square), 0) + depth * depth
-            tt_store(key, depth, alpha, TT_LOWER, mv)
-            return alpha
 
-    flag = TT_EXACT
-    if best_score <= alpha:
+            # Store the value that caused the cutoff (val) as a LOWER bound.
+            # Note: return value can be alpha (updated) or val -- storing val is clearer.
+            tt_store(key, depth, val, TT_LOWER, mv)
+            return val
+
+    # No cutoff happened; decide final flag using ORIGINAL bounds
+    if best_score <= orig_alpha:
         flag = TT_UPPER
-    elif best_score >= beta:
+    elif best_score >= orig_beta:
         flag = TT_LOWER
+    else:
+        flag = TT_EXACT
+
     tt_store(key, depth, best_score, flag, best_move)
     return best_score
 
@@ -1128,6 +1189,7 @@ def alpha_beta(
 def mate_dfs(board: chess.Board, depth: int, ply: int) -> Optional[int]:
     global node_count
     if timeout():
+        # your existing pattern raised TimeoutError in mate_dfs; keep that
         raise TimeoutError
     node_count += 1
 
@@ -1149,7 +1211,6 @@ def mate_dfs(board: chess.Board, depth: int, ply: int) -> Optional[int]:
         board.push(m)
         try:
             if board.is_checkmate():
-                board.pop()
                 mate_score = MATE_VALUE - ply
                 MateTT[key] = mate_score
                 return mate_score
@@ -1174,15 +1235,14 @@ def mate_dfs(board: chess.Board, depth: int, ply: int) -> Optional[int]:
             if not opp_has_escape:
                 mate_score = MATE_VALUE - ply
                 MateTT[key] = mate_score
-                board.pop()
                 return mate_score
         finally:
+            # pop the move m (safe single pop)
             if board.move_stack and board.move_stack[-1] == m:
                 board.pop()
 
     MateTT[key] = None
     return None
-
 def mate_search_root(board: chess.Board, max_mate_ply: int, time_limit_s: float) -> Optional[List[chess.Move]]:
     global start_time, time_limit, node_count, MateTT
     node_count = 0
