@@ -592,314 +592,342 @@ def order_moves(board: chess.Board, moves: List[chess.Move],
 
 # ---------- EVALUATION ----------
 # Global pawn hash table to cache pawn structure evaluations
-PAWN_HASH = {}
+# --- EVALUATION (replacement) ---
+PAWN_HASH = {}  # simple cache; consider bounded LRU for long games
 
-def pawn_structure_hash(board):
-    # Use white and black pawn bitboards as the key
+# Tuned constants (centipawns)
+PASSED_PAWN_BASE = 25
+PASSED_PAWN_RANK_BONUS = 10     # per rank advanced
+ISOLATED_PAWN_PENALTY = -20
+DOUBLED_PAWN_PENALTY = -15
+PAWN_CHAIN_BONUS = 8
+BLOCKADED_PAWN_PENALTY = -18
+
+POS_SCALE = 0.45
+MOBILITY_SCALE = 0.22
+KING_SAFETY_SCALE = 0.9
+SPACE_SCALE = 0.55
+CHECK_PENALTY = 40
+
+def pawn_structure_hash(board: chess.Board) -> int:
+    """
+    Fast, readable pawn structure evaluator with caching.
+    Returns a centipawn value (positive = White advantage).
+    """
+    # key = (white_pawns_bitboard_int, black_pawns_bitboard_int)
     key = (int(board.pieces(chess.PAWN, chess.WHITE)), int(board.pieces(chess.PAWN, chess.BLACK)))
     if key in PAWN_HASH:
         return PAWN_HASH[key]
-    score_white = 0
 
-    def is_passed_pawn(board, square, color):
-        file = chess.square_file(square)
-        rank = chess.square_rank(square)
-        opp_pawns = board.pieces(chess.PAWN, not color)
-        for f in range(max(0, file-1), min(7, file+1)+1):
-            for r in (range(rank+1, 8) if color == chess.WHITE else range(rank-1, -1, -1)):
-                sq = chess.square(f, r)
-                if sq in opp_pawns:
-                    return False
-        return True
+    white_pawns = set(board.pieces(chess.PAWN, chess.WHITE))
+    black_pawns = set(board.pieces(chess.PAWN, chess.BLACK))
 
-    def is_isolated_pawn(board, square, color):
-        file = chess.square_file(square)
-        for df in [-1, 1]:
-            nf = file + df
-            if 0 <= nf < 8:
-                found = False
-                for r in range(8):
-                    sq = chess.square(nf, r)
-                    if sq in board.pieces(chess.PAWN, color):
-                        found = True
-                        break
-                if found:
-                    return False
-        return True
+    score = 0
 
-    def is_doubled_pawn(board, square, color):
-        file = chess.square_file(square)
-        count = 0
-        for r in range(8):
-            sq = chess.square(file, r)
-            if sq in board.pieces(chess.PAWN, color):
-                count += 1
-        return count > 1
-
-    def pawn_chain_bonus(board, square, color):
+    def is_passed(square: int, color: int) -> bool:
         file = chess.square_file(square)
         rank = chess.square_rank(square)
         if color == chess.WHITE:
-            for df in [-1, 1]:
-                nf = file + df
-                nr = rank - 1
-                if 0 <= nf < 8 and 0 <= nr < 8:
-                    sq = chess.square(nf, nr)
-                    if sq in board.pieces(chess.PAWN, color):
-                        return 3
+            # any black pawn on same file or adjacent files ahead cancels passed status
+            for f in range(max(0, file - 1), min(7, file + 1) + 1):
+                for r in range(rank + 1, 8):
+                    if chess.square(f, r) in black_pawns:
+                        return False
+            return True
         else:
-            for df in [-1, 1]:
-                nf = file + df
-                nr = rank + 1
-                if 0 <= nf < 8 and 0 <= nr < 8:
-                    sq = chess.square(nf, nr)
-                    if sq in board.pieces(chess.PAWN, color):
-                        return 3
-        return 0
+            for f in range(max(0, file - 1), min(7, file + 1) + 1):
+                for r in range(rank - 1, -1, -1):
+                    if chess.square(f, r) in white_pawns:
+                        return False
+            return True
 
-    def is_blockaded(board, square, color):
+    def is_isolated(square: int, color: int) -> bool:
         file = chess.square_file(square)
-        rank = chess.square_rank(square)
-        if color == chess.WHITE and rank < 7:
-            sq = chess.square(file, rank + 1)
-            piece = board.piece_at(sq)
-            return piece is not None and piece.color != color
-        if color == chess.BLACK and rank > 0:
-            sq = chess.square(file, rank - 1)
-            piece = board.piece_at(sq)
-            return piece is not None and piece.color != color
+        target_set = white_pawns if color == chess.WHITE else black_pawns
+        for df in (-1, 1):
+            nf = file + df
+            if 0 <= nf < 8:
+                for r in range(8):
+                    if chess.square(nf, r) in target_set:
+                        return False
+        return True
+
+    def is_doubled(square: int, color: int) -> bool:
+        file = chess.square_file(square)
+        target_set = white_pawns if color == chess.WHITE else black_pawns
+        cnt = 0
+        for r in range(8):
+            if chess.square(file, r) in target_set:
+                cnt += 1
+                if cnt > 1:
+                    return True
         return False
 
-    # White pawns
-    for sq in board.pieces(chess.PAWN, chess.WHITE):
-        rank = chess.square_rank(sq)
-        if is_passed_pawn(board, sq, chess.WHITE):
-            score_white += 6 * (rank - 1)
-        if is_isolated_pawn(board, sq, chess.WHITE):
-            score_white -= 4
-        if is_doubled_pawn(board, sq, chess.WHITE):
-            score_white -= 5
-        score_white += pawn_chain_bonus(board, sq, chess.WHITE)
-        if is_blockaded(board, sq, chess.WHITE):
-            score_white -= 6
+    def pawn_chain_bonus(square: int, color: int) -> int:
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        target_set = white_pawns if color == chess.WHITE else black_pawns
+        if color == chess.WHITE:
+            nr = rank - 1
+            for df in (-1, 1):
+                nf = file + df
+                if 0 <= nf < 8 and 0 <= nr < 8:
+                    if chess.square(nf, nr) in target_set:
+                        return PAWN_CHAIN_BONUS
+        else:
+            nr = rank + 1
+            for df in (-1, 1):
+                nf = file + df
+                if 0 <= nf < 8 and 0 <= nr < 8:
+                    if chess.square(nf, nr) in target_set:
+                        return PAWN_CHAIN_BONUS
+        return 0
 
-    # Black pawns
-    for sq in board.pieces(chess.PAWN, chess.BLACK):
-        rank = 7 - chess.square_rank(sq)
-        if is_passed_pawn(board, sq, chess.BLACK):
-            score_white -= 8 * (rank - 1)
-        if is_isolated_pawn(board, sq, chess.BLACK):
-            score_white += 6
-        if is_doubled_pawn(board, sq, chess.BLACK):
-            score_white += 6
-        score_white -= pawn_chain_bonus(board, sq, chess.BLACK)
-        if is_blockaded(board, sq, chess.BLACK):
-            score_white += 7
+    def is_blockaded(square: int, color: int) -> bool:
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        if color == chess.WHITE:
+            if rank < 7:
+                sq = chess.square(file, rank + 1)
+                p = board.piece_at(sq)
+                return p is not None and p.color != chess.WHITE
+            return False
+        else:
+            if rank > 0:
+                sq = chess.square(file, rank - 1)
+                p = board.piece_at(sq)
+                return p is not None and p.color != chess.BLACK
+            return False
 
-    PAWN_HASH[key] = score_white
-    return score_white
+    # Evaluate white pawns
+    for sq in white_pawns:
+        r = chess.square_rank(sq)
+        if is_passed(sq, chess.WHITE):
+            score += PASSED_PAWN_BASE + PASSED_PAWN_RANK_BONUS * (r - 1)
+        if is_isolated(sq, chess.WHITE):
+            score += ISOLATED_PAWN_PENALTY
+        if is_doubled(sq, chess.WHITE):
+            score += DOUBLED_PAWN_PENALTY
+        score += pawn_chain_bonus(sq, chess.WHITE)
+        if is_blockaded(sq, chess.WHITE):
+            score += BLOCKADED_PAWN_PENALTY
 
-def is_outpost(board, sq, color):
+    # Evaluate black pawns (subtract from white score)
+    for sq in black_pawns:
+        r = 7 - chess.square_rank(sq)  # black advancement from their perspective
+        if is_passed(sq, chess.BLACK):
+            score -= PASSED_PAWN_BASE + PASSED_PAWN_RANK_BONUS * (r - 1)
+        if is_isolated(sq, chess.BLACK):
+            score -= ISOLATED_PAWN_PENALTY * 0.9   # slightly different scaling ok
+        if is_doubled(sq, chess.BLACK):
+            score -= DOUBLED_PAWN_PENALTY * 0.9
+        score -= pawn_chain_bonus(sq, chess.BLACK)
+        if is_blockaded(sq, chess.BLACK):
+            score -= BLOCKADED_PAWN_PENALTY * 0.9
+
+    # store cached integer
+    PAWN_HASH[key] = int(score)
+    return int(score)
+
+
+def is_outpost(board: chess.Board, sq: int, color: int) -> bool:
+    """
+    Simple outpost test:
+    - square must be on enemy half (rank >= 3 for white, <= 4 for black)
+    - no enemy pawns on adjacent files in forward ranks (so piece cannot be easily kicked)
+    """
     rank = chess.square_rank(sq)
     file = chess.square_file(sq)
-    if color == chess.WHITE and rank >= 3:
-        for df in [-1, 1]:
+    if color == chess.WHITE:
+        if rank < 3:
+            return False
+        for df in (-1, 1):
             f = file + df
             if 0 <= f < 8:
                 for r in range(rank, 8):
                     if chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK):
                         return False
         return True
-    if color == chess.BLACK and rank <= 4:
-        for df in [-1, 1]:
+    else:
+        if rank > 4:
+            return False
+        for df in (-1, 1):
             f = file + df
             if 0 <= f < 8:
                 for r in range(rank, -1, -1):
                     if chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE):
                         return False
         return True
-    return False
 
-def is_open_file(board, file, color):
-    own_pawns = board.pieces(chess.PAWN, color)
-    enemy_pawns = board.pieces(chess.PAWN, not color)
+
+def is_open_file(board: chess.Board, file: int) -> bool:
+    """Open file: no pawns of either color on that file."""
     for r in range(8):
         sq = chess.square(file, r)
-        if sq in own_pawns:
-            return False
-    for r in range(8):
-        sq = chess.square(file, r)
-        if sq in enemy_pawns:
+        if sq in board.pieces(chess.PAWN, chess.WHITE) or sq in board.pieces(chess.PAWN, chess.BLACK):
             return False
     return True
 
-def is_semi_open_file(board, file, color):
-    own_pawns = board.pieces(chess.PAWN, color)
+
+def is_semi_open_file(board: chess.Board, file: int, color: int) -> bool:
+    """Semi-open: no friendly pawns on file (enemy pawns allowed)."""
     for r in range(8):
         sq = chess.square(file, r)
-        if sq in own_pawns:
+        if sq in board.pieces(chess.PAWN, color):
             return False
     return True
+
 
 def evaluate(board: chess.Board) -> int:
-    score_white = 0
+    """
+    Main evaluation function.
+    Returns centipawns from White's perspective (positive = White advantage).
+    """
+    score = 0.0
 
-    # --- Scaling constants ---
-    POS_SCALE = 0.4    # limits positional impact
-    MOBILITY_SCALE = 0.25  # mobility shouldn't outweigh material
-    KING_SAFETY_SCALE = 0.8
-    SPACE_SCALE = 0.6
-    CHECK_PENALTY = 40     # smaller to avoid panic sacrifices
-
-    # --- Material and PST ---
+    # Material + PST
     for pt, val in PIECE_VALUE.items():
-        w_count = len(board.pieces(pt, chess.WHITE))
-        b_count = len(board.pieces(pt, chess.BLACK))
-        score_white += val * (w_count - b_count)
+        w_sqs = list(board.pieces(pt, chess.WHITE))
+        b_sqs = list(board.pieces(pt, chess.BLACK))
+        score += val * (len(w_sqs) - len(b_sqs))
 
-        # --- White PST bonuses ---
-        for s in board.pieces(pt, chess.WHITE):
-            pst_bonus = interpolate_pst(board, pt, s, chess.WHITE)
-            if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
-                if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
-                    pst_bonus += 10
-            score_white += pst_bonus * POS_SCALE
+        # per-piece PST scaled by POS_SCALE
+        for s in w_sqs:
+            score += interpolate_pst(board, pt, s, chess.WHITE) * POS_SCALE
+        for s in b_sqs:
+            score -= interpolate_pst(board, pt, s, chess.BLACK) * POS_SCALE
 
-        # --- Black PST penalties ---
-        for s in board.pieces(pt, chess.BLACK):
-            pst_bonus = interpolate_pst(board, pt, s, chess.BLACK)
-            if pt == chess.BISHOP and len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
-                if chess.square_file(s) in [2, 3, 4, 5] and chess.square_rank(s) in [2, 3, 4, 5]:
-                    pst_bonus += 10
-            score_white -= pst_bonus * POS_SCALE
-
-    # --- Mobility (scaled) ---
+    # Mobility (piece attacks) — weighted modestly
     mobility_white = 0
     mobility_black = 0
-    for pt in [chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]:
-        for sq in board.pieces(pt, chess.WHITE):
-            mobility_white += len(board.attacks(sq))
-        for sq in board.pieces(pt, chess.BLACK):
-            mobility_black += len(board.attacks(sq))
-    score_white += (mobility_white - mobility_black) * 2 * MOBILITY_SCALE
+    for pt in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+        for s in board.pieces(pt, chess.WHITE):
+            mobility_white += len(board.attacks(s))
+        for s in board.pieces(pt, chess.BLACK):
+            mobility_black += len(board.attacks(s))
+    score += (mobility_white - mobility_black) * 2 * MOBILITY_SCALE
 
-    # --- Legal move activity ---
-    score_white += (len(list(board.legal_moves)) // 2) * (1 if board.turn == chess.WHITE else -1) * POS_SCALE
+    # Legal moves/activity (small)
+    legal_count = len(list(board.legal_moves))
+    # add small bonus toward side with more legal moves (positive = White)
+    if board.turn == chess.WHITE:
+        score += (legal_count // 2) * POS_SCALE
+    else:
+        score -= (legal_count // 2) * POS_SCALE
 
-    # --- Center control ---
-    for c in [chess.E4, chess.D4, chess.E5, chess.D5]:
+    # Center control (explicit points for pieces in central squares)
+    center_sqs = (chess.E4, chess.D4, chess.E5, chess.D5)
+    for c in center_sqs:
         p = board.piece_at(c)
         if p:
-            score_white += (15 if p.color == chess.WHITE else -15) * POS_SCALE
+            score += (15 if p.color == chess.WHITE else -15) * POS_SCALE
 
-    # --- Bishop pair ---
+    # Bishop pair
     if len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
-        score_white += 35
+        score += 35
     if len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
-        score_white -= 35
+        score -= 35
 
-    # --- Outposts ---
-    for sq in board.pieces(chess.KNIGHT, chess.WHITE):
-        if is_outpost(board, sq, chess.WHITE):
-            score_white += 18 * POS_SCALE
-    for sq in board.pieces(chess.BISHOP, chess.WHITE):
-        if is_outpost(board, sq, chess.WHITE):
-            score_white += 12 * POS_SCALE
-    for sq in board.pieces(chess.KNIGHT, chess.BLACK):
-        if is_outpost(board, sq, chess.BLACK):
-            score_white -= 18 * POS_SCALE
-    for sq in board.pieces(chess.BISHOP, chess.BLACK):
-        if is_outpost(board, sq, chess.BLACK):
-            score_white -= 12 * POS_SCALE
+    # Outpost bonuses
+    for s in board.pieces(chess.KNIGHT, chess.WHITE):
+        if is_outpost(board, s, chess.WHITE):
+            score += 18 * POS_SCALE
+    for s in board.pieces(chess.BISHOP, chess.WHITE):
+        if is_outpost(board, s, chess.WHITE):
+            score += 12 * POS_SCALE
+    for s in board.pieces(chess.KNIGHT, chess.BLACK):
+        if is_outpost(board, s, chess.BLACK):
+            score -= 18 * POS_SCALE
+    for s in board.pieces(chess.BISHOP, chess.BLACK):
+        if is_outpost(board, s, chess.BLACK):
+            score -= 12 * POS_SCALE
 
-    # --- Pawn structure ---
-    score_white += pawn_structure_hash(board)
+    # Pawn structure (cached)
+    score += pawn_structure_hash(board)
 
-    # --- Rook activity ---
-    for sq in board.pieces(chess.ROOK, chess.WHITE):
-        rank = chess.square_rank(sq)
-        file = chess.square_file(sq)
+    # Rook activity (rank and file)
+    for s in board.pieces(chess.ROOK, chess.WHITE):
+        rank = chess.square_rank(s)
+        file = chess.square_file(s)
         if rank >= 6:
-            score_white += 22 * POS_SCALE
-        if is_open_file(board, file, chess.WHITE):
-            score_white += 18 * POS_SCALE
+            score += 22 * POS_SCALE
+        if is_open_file(board, file):
+            score += 18 * POS_SCALE
         elif is_semi_open_file(board, file, chess.WHITE):
-            score_white += 9 * POS_SCALE
-    for sq in board.pieces(chess.ROOK, chess.BLACK):
-        rank = chess.square_rank(sq)
-        file = chess.square_file(sq)
+            score += 9 * POS_SCALE
+    for s in board.pieces(chess.ROOK, chess.BLACK):
+        rank = chess.square_rank(s)
+        file = chess.square_file(s)
         if rank <= 1:
-            score_white -= 22 * POS_SCALE
-        if is_open_file(board, file, chess.BLACK):
-            score_white -= 18 * POS_SCALE
+            score -= 22 * POS_SCALE
+        if is_open_file(board, file):
+            score -= 18 * POS_SCALE
         elif is_semi_open_file(board, file, chess.BLACK):
-            score_white -= 9 * POS_SCALE
+            score -= 9 * POS_SCALE
 
-    # --- Space advantage ---
+    # Space: count advanced major/minor pieces into opponent half
     space_white = 0
     space_black = 0
-    for sq in range(8, 32):
-        p = board.piece_at(sq)
-        if p and p.color == chess.WHITE and p.piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+    for s in board.pieces(chess.KNIGHT, chess.WHITE) | board.pieces(chess.BISHOP, chess.WHITE) | board.pieces(chess.ROOK, chess.WHITE) | board.pieces(chess.QUEEN, chess.WHITE):
+        if chess.square_rank(s) >= 4:
             space_white += 1
-    for sq in range(32, 56):
-        p = board.piece_at(sq)
-        if p and p.color == chess.BLACK and p.piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+    for s in board.pieces(chess.KNIGHT, chess.BLACK) | board.pieces(chess.BISHOP, chess.BLACK) | board.pieces(chess.ROOK, chess.BLACK) | board.pieces(chess.QUEEN, chess.BLACK):
+        if chess.square_rank(s) <= 3:
             space_black += 1
-    score_white += 12 * (space_white - space_black) * SPACE_SCALE
+    score += 12 * (space_white - space_black) * SPACE_SCALE
 
-    # --- King safety ---
-    phase = get_phase(board)
-    for color in [chess.WHITE, chess.BLACK]:
-        king_sq_list = list(board.pieces(chess.KING, color))
-        if not king_sq_list:
+    # King safety: simple shield + nearby attackers
+    phase = get_phase(board) if 'get_phase' in globals() else 0
+    for color in (chess.WHITE, chess.BLACK):
+        king_sqs = list(board.pieces(chess.KING, color))
+        if not king_sqs:
             continue
-        sq = king_sq_list[0]
-        king_rank = chess.square_rank(sq)
-        king_file = chess.square_file(sq)
+        ksq = king_sqs[0]
+        kr = chess.square_rank(ksq)
+        kf = chess.square_file(ksq)
         shield = 0
         open_files = 0
-        if (color == chess.WHITE and phase < PHASE_MAX // 2 and king_rank <= 1) or \
-           (color == chess.BLACK and phase < PHASE_MAX // 2 and king_rank >= 6):
-            for df in [-1, 0, 1]:
-                f = king_file + df
+        # only evaluate shield for castled/early phases
+        if (color == chess.WHITE and phase < PHASE_MAX // 2) or (color == chess.BLACK and phase < PHASE_MAX // 2):
+            for df in (-1, 0, 1):
+                f = kf + df
                 if 0 <= f < 8:
                     if color == chess.WHITE:
-                        pawn_sq = chess.square(f, king_rank + 1)
-                        if pawn_sq in board.pieces(chess.PAWN, chess.WHITE):
+                        pawn_sq = chess.square(f, kr + 1) if kr + 1 < 8 else None
+                        if pawn_sq and pawn_sq in board.pieces(chess.PAWN, chess.WHITE):
                             shield += 1
                         if not any(chess.square(f, r) in board.pieces(chess.PAWN, chess.WHITE) for r in range(8)):
                             open_files += 1
                     else:
-                        pawn_sq = chess.square(f, king_rank - 1)
-                        if pawn_sq in board.pieces(chess.PAWN, chess.BLACK):
+                        pawn_sq = chess.square(f, kr - 1) if kr - 1 >= 0 else None
+                        if pawn_sq and pawn_sq in board.pieces(chess.PAWN, chess.BLACK):
                             shield += 1
                         if not any(chess.square(f, r) in board.pieces(chess.PAWN, chess.BLACK) for r in range(8)):
                             open_files += 1
         penalty = (3 - shield) * 18 + open_files * 12
-        attackers = sum(
-            1 for df in [-1, 0, 1] for dr in [-1, 0, 1]
-            if (df != 0 or dr != 0)
-            and 0 <= king_file + df < 8
-            and 0 <= king_rank + dr < 8
-            and board.is_attacked_by(not color, chess.square(king_file + df, king_rank + dr))
-        )
+        attackers = 0
+        for df in (-1, 0, 1):
+            for dr in (-1, 0, 1):
+                if df == 0 and dr == 0:
+                    continue
+                f = kf + df
+                r = kr + dr
+                if 0 <= f < 8 and 0 <= r < 8:
+                    if board.is_attacked_by(not color, chess.square(f, r)):
+                        attackers += 1
         penalty += attackers * 10
         penalty *= KING_SAFETY_SCALE
         if color == chess.WHITE:
-            score_white -= penalty
+            score -= penalty
         else:
-            score_white += penalty
+            score += penalty
 
-    # --- Check penalty ---
-        if board.is_check():
-            score_white += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
+    # Check penalty (small)
+    if board.is_check():
+        score += (-CHECK_PENALTY if board.turn == chess.WHITE else CHECK_PENALTY)
 
-    # --- Return normalized score (always integer) ---
+    # final integer centipawn result (White perspective)
     return int(score_white if board.turn == chess.WHITE else -score_white)
-
-    # --- Return normalized score ---
-    return score_white if board.turn == chess.WHITE else -score_white
 # ---------- QUIESCENCE ----------
 def quiescence(board: chess.Board, alpha: int, beta: int, depth: int = 0) -> int:
     """2-ply tactical quiescence search with SEE pruning and quiet tactical extensions."""
