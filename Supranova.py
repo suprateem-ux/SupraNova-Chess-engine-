@@ -1108,22 +1108,32 @@ def alpha_beta(
     is_pv: bool = False,
     excluded_move: Optional[chess.Move] = None,
 ) -> int:
+    """
+    Negamax-style alpha-beta with:
+      - TT probe (EXACT/LOWER/UPPER)
+      - repetition / fifty-move handling using side-to-move evaluation
+      - null-move pruning
+      - LMR (reduction)
+      - killer & history updates on cutoffs
+    Assumes evaluate(board) returns centipawns FROM WHITE'S PERSPECTIVE.
+    """
     global node_count, TT_AGE
 
-    # keep timeout behavior consistent with your existing code
+    # timeout handling preserved
     if timeout():
         return evaluate(board)
+
     node_count += 1
 
     key = get_key(board)
     ttent = TT.get(key)
 
-    # Save original bounds for correct flag computation later
     orig_alpha = alpha
     orig_beta = beta
 
-    # === TT probe: immediate cutoffs and ordering info ===
+    # === TT probe ===
     if ttent and ttent.depth >= depth:
+        # ttent.score is assumed to be in same convention (White-perspective)
         if ttent.flag == TT_EXACT:
             return ttent.score
         if ttent.flag == TT_LOWER:
@@ -1134,42 +1144,46 @@ def alpha_beta(
             if ttent.score <= alpha:
                 return ttent.score
             beta = min(beta, ttent.score)
-        # keep ttent for possible PV move ordering (only if depth is sufficient)
-    # -----------------------------------------
-    # Repetition / 50-move handling (policy: draw if losing, avoid if winning)
-    LOSS_THRESHOLD = 350      # centipawns: if side-to-move <= -LOSS_THRESHOLD -> accept draw
-    REPETITION_PENALTY = 30      # centipawns: small penalty to avoid repetition when winning
+        # keep ttent for PV move ordering later
 
-    if board.is_repetition(3) or board.can_claim_threefold_repetition() or board.is_fivefold_repetition():
-        stand = evaluate(board)  # from side-to-move POV
-        if stand <= -LOSS_THRESHOLD:
+    # --- Repetition / 50-move handling ---
+    # Use evaluation from SIDE-TO-MOVE perspective for decision
+    if board.is_repetition() or board.can_claim_threefold_repetition() or board.is_fivefold_repetition():
+        stand = evaluate(board)  # white-perspective
+        stand_smt = stand if board.turn == chess.WHITE else -stand
+        # If side-to-move is losing badly, accept draw (return 0)
+        if stand_smt <= -LOSS_THRESHOLD:
             return 0
-        else:
-            return -REPETITION_PENALTY
+        # Otherwise slightly penalize repetition to avoid taking it when winning
+        return -REPETITION_PENALTY
 
     if board.can_claim_fifty_moves() or board.is_fivefold_repetition():
         stand = evaluate(board)
-        if stand <= -LOSS_THRESHOLD:
+        stand_smt = stand if board.turn == chess.WHITE else -stand
+        if stand_smt <= -LOSS_THRESHOLD:
             return 0
-        else:
-            return -REPETITION_PENALTY
-    # -----------------------------------------
+        return -REPETITION_PENALTY
+
+    # Terminal checks
     if board.is_checkmate():
         return -MATE_VALUE + ply
     if board.is_stalemate():
         return 0
+
+    # Quiescence base
     if depth <= 0:
         return quiescence(board, alpha, beta)
 
-    # PV move: use only if the stored entry is deep enough (safer)
-    pvmove = ttent.best if (ttent and ttent.best and ttent.depth >= depth) else None
+    # PV move (only use if tt entry deep enough)
+    pvmove = ttent.best if (ttent and getattr(ttent, "best", None) and ttent.depth >= depth) else None
 
-    # Null-move reduction test (same as your code)
+    # Null-move reduction (negamax style)
     if (not is_pv) and depth >= 3 and not board.is_check() and not board.can_claim_draw():
         board.push(chess.Move.null())
         try:
             val = -alpha_beta(board, depth - 1 - NULL_REDUCTION, -beta, -beta + 1, ply + 1, False, None)
             if val >= beta:
+                # successful null-move cutoff => return beta (fail-high)
                 return beta
         finally:
             board.pop()
@@ -1179,18 +1193,18 @@ def alpha_beta(
         return 0
 
     moves = order_moves(board, moves, pvmove, ply)
+
     best_score = -INFTY
     best_move: Optional[chess.Move] = None
     first = True
 
     for i, mv in enumerate(moves):
-        # skip excluded move if you use that elsewhere
         if excluded_move and mv == excluded_move:
             continue
 
-        # LMR calculation (unchanged)
+        # LMR calculation for non-first, quiet, non-check, non-promo moves
         reduction = 0
-        if not first and depth >= 3 and not board.is_capture(mv) and not board.gives_check(mv) and not mv.promotion:
+        if (not first) and depth >= 3 and (not board.is_capture(mv)) and (not board.gives_check(mv)) and (not mv.promotion):
             reduction = int(LMR_BASE + math.log(max(depth, 2)) / LMR_DIV + math.log(i + 1) / LMR_DIV)
             reduction = max(0, min(reduction, depth - 2))
 
@@ -1202,8 +1216,9 @@ def alpha_beta(
                 try_depth = depth - 1 - reduction
                 if try_depth < 0:
                     try_depth = 0
+                # null-window search
                 val = -alpha_beta(board, try_depth, -alpha - 1, -alpha, ply + 1, True, None)
-                # if failed high on null-window, do full re-search
+                # if it fails high in null-window, do full search
                 if alpha < val < beta:
                     val = -alpha_beta(board, depth - 1, -beta, -alpha, ply + 1, True, None)
         finally:
@@ -1214,11 +1229,12 @@ def alpha_beta(
         if val > best_score:
             best_score = val
             best_move = mv
+
         if val > alpha:
             alpha = val
 
         if alpha >= beta:
-            # record killer/history (unchanged semantics)
+            # cutoff — update killer/history
             if not board.is_capture(mv):
                 km = KILLERS.setdefault(ply, [None, None])
                 if km[0] != mv:
@@ -1226,12 +1242,11 @@ def alpha_beta(
                     km[0] = mv
             HISTORY[(mv.from_square, mv.to_square)] = HISTORY.get((mv.from_square, mv.to_square), 0) + depth * depth
 
-            # Store the value that caused the cutoff (val) as a LOWER bound.
-            # Note: return value can be alpha (updated) or val -- storing val is clearer.
+            # store cutoff as LOWER bound
             tt_store(key, depth, val, TT_LOWER, mv)
             return val
 
-    # No cutoff happened; decide final flag using ORIGINAL bounds
+    # No cutoff — decide final TT flag using original bounds
     if best_score <= orig_alpha:
         flag = TT_UPPER
     elif best_score >= orig_beta:
@@ -1241,7 +1256,6 @@ def alpha_beta(
 
     tt_store(key, depth, best_score, flag, best_move)
     return best_score
-
 # ---------- MATE-ONLY SEARCH (fast focused solver) ----------
 def mate_dfs(board: chess.Board, depth: int, ply: int) -> Optional[int]:
     global node_count
