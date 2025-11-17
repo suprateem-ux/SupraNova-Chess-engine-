@@ -399,20 +399,24 @@ def see_safe(board: chess.Board, move: chess.Move, use_cache: bool = True) -> in
         return 0
 
 # ---------- Sliding attack helpers ----------
-def ray_attacks(square, deltas, occ):
+def ray_attacks(square: int, deltas: list[int], occ: int) -> int:
     attacks = 0
     for d in deltas:
         sq = square
         while True:
-            prev_file = sq % 8
+            prev_file = sq & 7      # faster than sq % 8
             sq += d
             if sq < 0 or sq > 63:
                 break
-            new_file = sq % 8
-            # If moving left/right and file changed by more than 1, it's a wrap
+            new_file = sq & 7
+
+            # Prevent horizontal wrap (file must move exactly ±1 on diagonals, or 0 on vertical)
             if abs(new_file - prev_file) > 1:
                 break
+
             attacks |= 1 << sq
+
+            # Stop if blocker encountered
             if occ & (1 << sq):
                 break
     return attacks
