@@ -570,7 +570,7 @@ def move_score(board: chess.Board, move: chess.Move,
         score += 5_000
 
     # ----- History heuristic -----
-    score += HISTORY.get((move.from_square, move.to_square), 0)
+    score += HISTORY.get((board.turn, move.from_square, move.to_square), 0)
 
     return score
 
@@ -1240,17 +1240,20 @@ def alpha_beta(
             alpha = val
 
         if alpha >= beta:
-            # cutoff — update killer/history
             if not board.is_capture(mv):
-                km = KILLERS.setdefault(ply, [None, None])
-                if km[0] != mv:
-                    km[1] = km[0]
-                    km[0] = mv
-            HISTORY[(mv.from_square, mv.to_square)] = HISTORY.get((mv.from_square, mv.to_square), 0) + depth * depth
+                k1, k2 = KILLERS.get(ply, (None, None))
 
-            # store cutoff as LOWER bound
+                if mv != k1:
+                    # move k1 to k2, new move into k1
+                    KILLERS[ply] = (mv, k1)
+
+                # ----- History update (directional + quiet moves only) -----
+                key_hist = (board.turn, mv.from_square, mv.to_square)
+                HISTORY[key_hist] = HISTORY.get(key_hist, 0) + depth * depth
+
+            # TT store as LOWER bound
             tt_store(key, depth, val, TT_LOWER, mv)
-            return val
+            return val 
 
     # No cutoff — decide final TT flag using original bounds
     if best_score <= orig_alpha:
